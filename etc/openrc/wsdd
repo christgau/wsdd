@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+# Copyright 2017 Steffen Christgau
+# Distributed under the terms of the MIT licence
+
+depend() {
+	need net
+	need samba
+}
+
+SMB_CONFIG_FILE="/etc/samba/smb.conf"
+LOG_FILE="/var/log/wsdd.log"
+WSDD_EXEC="/usr/bin/wsdd"
+RUN_AS_USER="daemon:daemon"
+
+start() {
+	ebegin "Starting ${RC_SVCNAME} daemon"
+
+	OPTS=""
+	if [ -r "${SMB_CONFIG_FILE}" ]; then
+		GROUP=`grep -i '^\s*workgroup\s*=' ${SMB_CONFIG_FILE} | cut -f2 -d= | tr -d '[:blank:]'`
+		if [ "${GROUP}x" != "x" ]; then
+			OPTS="-w ${GROUP} ${OPTS}"
+		fi
+	fi
+
+	if [ ! -r "${LOG_FILE}" ]; then
+		touch "${LOG_FILE}"
+	fi
+	chown ${RUN_AS_USER} "${LOG_FILE}"
+
+	start-stop-daemon --start --background --user ${RUN_AS_USER} --make-pidfile --pidfile /var/run/${RC_SVCNAME}.pid --stdout "${LOG_FILE}" --stderr "${LOG_FILE}" --exec ${WSDD_EXEC} -- ${OPTS}
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping ${RC_SVCNAME} daemon"
+	start-stop-daemon --stop --pidfile /var/run/${RC_SVCNAME}.pid --exec ${WSDD_EXEC}
+	eend $?
+}
