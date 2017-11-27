@@ -4,19 +4,17 @@
 # specification.
 #
 # The purpose is to enable non-Windows devices to be found by the 'Network
-# (Neighborhood)' from Windows machines. Spawns a child process for handling
-# HTTP traffic
+# (Neighborhood)' from Windows machines.
 #
 # see http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf and
 # related documents for details (look at README for more references)
 #
 # (c) Steffen Christgau, 2017
 
-import os
 import sys
 import signal
 import socket
-import select
+import selectors
 import struct
 import argparse
 import uuid
@@ -53,6 +51,15 @@ if_addrs._fields_ = [('next', ctypes.POINTER(if_addrs)),
                      ('netmask', ctypes.POINTER(sockaddr))]
 
 
+# simple HTTP server with IPv6 support
+class HTTPv6Server(http.server.HTTPServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+
+
 # class for handling multicast traffic on a given interface for a
 # given address family. It provides multicast sender and receiver sockets
 class MulticastInterface:
@@ -65,6 +72,7 @@ class MulticastInterface:
         self.send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
         self.transport_address = address
         self.multicast_address = None
+        self.listen_address = None
 
         if family == socket.AF_INET:
             self.init_v4()
@@ -75,6 +83,8 @@ class MulticastInterface:
             self.multicast_address, self.interface, self.address))
         logger.debug('transport address on {0} is {1}'.format(
             self.interface, self.transport_address))
+        logger.debug('will listen for HTTP traffic on address {0}'.format(
+            self.listen_address))
 
     def init_v6(self):
         self.multicast_address = (
@@ -100,6 +110,10 @@ class MulticastInterface:
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
 
         self.transport_address = '[{0}]'.format(self.address)
+        self.listen_address = (
+                self.address,
+                WSD_HTTP_PORT, 0,
+                socket.if_nametoindex(self.interface))
 
     def init_v4(self):
         self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
@@ -113,9 +127,10 @@ class MulticastInterface:
             socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
         self.recv_socket.bind((WSD_MCAST_GRP_V4, WSD_UDP_PORT))
 
-        # self.send_socket.bind((self.address, 0))
         self.send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
+
+        self.listen_address = (self.address, WSD_HTTP_PORT)
 
 
 # constants for WSD XML/SOAP parsing
@@ -194,7 +209,8 @@ def wsd_add_endpoint_reference(parent):
 def wsd_add_xaddr(parent, transport_addr):
     if transport_addr:
         item = ElementTree.SubElement(parent, 'wsd:XAddrs')
-        item.text = 'http://{0}:5357/{1}'.format(transport_addr, args.uuid)
+        item.text = 'http://{0}:{1}/{2}'.format(
+            transport_addr, WSD_HTTP_PORT, args.uuid)
 
 
 # build a WSD message with a given action string including SOAP header
@@ -376,44 +392,57 @@ def wsd_handle_message(data, interface):
         return None
 
 
-# WS-Discovery, Hello message, Section 4.1
-def wsd_get_hello_msg(interface):
-    hello = ElementTree.Element('wsd:Hello')
-    wsd_add_endpoint_reference(hello)
-    wsd_add_xaddr(hello, interface.transport_address)
-    wsd_add_metadata_version(hello)
+# class for handling WSD multi/unicast request coming from UDP datagrams
+class WSDUdpRequestHandler():
+    def __init__(self, interface):
+        self.interface = interface
 
-    return wsd_build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
+    def handle_request(self):
+        msg, address = self.interface.recv_socket.recvfrom(WSD_MAX_LEN)
+        msg = wsd_handle_message(msg, self.interface)
+        if msg:
+            self.send_datagram(msg, address=address)
 
+    # WS-Discovery, Section 4.1, Hello message
+    def send_hello(self):
+        hello = ElementTree.Element('wsd:Hello')
+        wsd_add_endpoint_reference(hello)
+        # THINK: Microsoft does not send the transport address here due
+        # to privacy reasons. Could make this optional.
+        wsd_add_xaddr(hello, self.interface.transport_address)
+        wsd_add_metadata_version(hello)
 
-# WS-Discovery, Bye message, Section 4.2
-def wsd_get_bye_msg():
-    bye = ElementTree.Element('wsd:Bye')
-    wsd_add_endpoint_reference(bye)
+        msg = wsd_build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
+        self.send_datagram(msg, msg_type='Hello')
 
-    return wsd_build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
+    # WS-Discovery, Section 4.2, Bye message
+    def send_bye(self):
+        bye = ElementTree.Element('wsd:Bye')
+        wsd_add_endpoint_reference(bye)
 
+        msg = wsd_build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
+        self.send_datagram(msg, msg_type='Bye')
 
-# transmit a WSD (SOAP) message via the given MulticastInterface
-# implements SOAP over UDP, Appendix I
-def wsd_send_datagram(msg, interface, address=None, msg_type=None):
-    if not address:
-        address = interface.multicast_address
+    # transmit a WSD (SOAP) message via the own MulticastInterface
+    # implements SOAP over UDP, Appendix I
+    def send_datagram(self, msg, address=None, msg_type=None):
+        if not address:
+            address = self.interface.multicast_address
 
-    if msg_type:
-        logger.debug('outgoing {0} message via {1} to {2}'.format(
-            msg_type, interface.interface, address))
+        if msg_type:
+            logger.debug('outgoing {0} message via {1} to {2}'.format(
+                msg_type, self.interface.interface, address))
 
-    t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY) / 1000
-    for i in range(MULTICAST_UDP_REPEAT):
-        logger.debug('retransmit #{0}, sleeping {1} s'.format(i, t))
-        try:
-            interface.send_socket.sendto(msg, address)
-        except:
-            logger.exception('error send multicast datagram')
+        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY) / 1000
+        for i in range(MULTICAST_UDP_REPEAT):
+            logger.debug('retransmit #{0}, sleeping {1} s'.format(i, t))
+            try:
+                self.interface.send_socket.sendto(msg, address)
+            except:
+                logger.exception('error send multicast datagram')
 
-        time.sleep(t)
-        t = min(t * 2, UDP_UPPER_DELAY)
+            time.sleep(t)
+            t = min(t * 2, UDP_UPPER_DELAY)
 
 
 # class for handling WSD requests coming over HTTP
@@ -493,7 +522,7 @@ def sigterm_handler(signum, frame):
 
 
 # handle command line arguments and enumerate interface list
-def main_common():
+def parse_args():
     global args, logger
 
     parser = argparse.ArgumentParser()
@@ -569,90 +598,59 @@ def main_common():
 # multicast handling: send Hello message on startup, receive from multicast
 # sockets and handle the messages, and emit Bye message when process gets
 # terminated by signal
-def main_multicast_server(addresses, http_pid):
-    interfaces = []
-    recv_socks = []
+def serve_wsd_requests(addresses):
+    s = selectors.DefaultSelector()
+    udp_srvs = []
 
     for address in addresses:
         interface = MulticastInterface(address[1], address[2], address[0])
-        interfaces.append(interface)
-        recv_socks.append(interface.recv_socket)
-        wsd_send_datagram(
-            wsd_get_hello_msg(interface), interface, msg_type='Hello')
+        udp_srv = WSDUdpRequestHandler(interface)
+        udp_srvs.append(udp_srv)
+        s.register(interface.recv_socket, selectors.EVENT_READ, udp_srv)
 
+        if not args.nohttp:
+            klass = (
+                http.server.HTTPServer
+                if interface.family == socket.AF_INET
+                else HTTPv6Server)
+            http_srv = klass(interface.listen_address, WSDHttpRequestHandler)
+            s.register(http_srv.fileno(), selectors.EVENT_READ, http_srv)
+
+    # everything is set up, announce ourself and serve requests
     try:
+        for srv in udp_srvs:
+            srv.send_hello()
+
         while True:
             try:
-                read_socks, ignored, err_socks = select.select(
-                    recv_socks, [], recv_socks)
-                for s in read_socks:
-                    for interface in interfaces:
-                        if interface.recv_socket == s:
-                            msg, address = s.recvfrom(WSD_MAX_LEN)
-                            msg = wsd_handle_message(msg, interface)
-                            if msg:
-                                wsd_send_datagram(
-                                    msg, interface, address=address)
+                events = s.select()
+                for key, mask in events:
+                    key.data.handle_request()
             except (SystemExit, KeyboardInterrupt):
                 # silently exit the loop
                 logger.debug('got termination signal')
                 break
             except Exception:
                 logger.exception('error in main loop')
-
     finally:
         logger.info('shutting down gracefully...')
 
-        # terminate http process first
-        os.kill(http_pid, signal.SIGTERM)
-        os.waitpid(http_pid, os.WNOHANG)
-
-        # say goodbye
-        for interface in interfaces:
-            wsd_send_datagram(wsd_get_bye_msg(), interface, msg_type='Bye')
-        logger.info('Done.')
-
-
-# setting up HTTP server for Get messages
-class HTTPv6Server(http.server.HTTPServer):
-    address_family = socket.AF_INET6
-
-
-def main_http_server(addresses):
-    global logger
-    logger = logging.getLogger('wshttp')
-    if args.ipv4only:
-        httpd = http.server.HTTPServer(
-                ('', WSD_HTTP_PORT),
-                WSDHttpRequestHandler)
-    else:
-        # binds to IPv4 and v6 on Linux if not disabled via sysctl
-        httpd = HTTPv6Server(
-                ('::', WSD_HTTP_PORT),
-                WSDHttpRequestHandler)
-
-    try:
-        httpd.serve_forever()
-    except (SystemExit, KeyboardInterrupt):
-        logger.info('http server terminated')
+    # say goodbye
+    for srv in udp_srvs:
+        srv.send_bye()
 
 
 def main():
-    main_common()
+    parse_args()
+
     addresses = enumerate_host_interfaces()
     if not addresses:
         logger.error("No multicast addresses available. Exiting.")
         return 1
 
     signal.signal(signal.SIGTERM, sigterm_handler)
-    pid = os.fork()
-    if pid == 0:
-        if not args.nohttp:
-            main_http_server(addresses)
-    elif pid != -1:
-        logger.info('child process forked with pid {0}'.format(pid))
-        time.sleep(1)
-        main_multicast_server(addresses, pid)
+    serve_wsd_requests(addresses)
+    logger.info('Done.')
 
 
 if __name__ == '__main__':

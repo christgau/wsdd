@@ -100,10 +100,8 @@ allowed.
 
  * `-t`, `--nohttp`
 
-     Do not service http requests of the WSD protocol. The process that handles
-     those requests is started anyways but terminated immediately afterwards.
-     This option is intended for debugging purposes where another process may
-     handle the Get messages.
+     Do not service http requests of the WSD protocol. This option is intended
+     for debugging purposes where another process may handle the Get messages.
 
  * `-v`, `--verbose`
 
@@ -135,25 +133,9 @@ allowed.
 
 ## Known Issues
 
-### HTTP service listens on all interfaces
 
-Although interfaces can be specified on the command line, they are only
-accounted for multicast traffic. The required HTTP service does not bind to any
-interface, but all.
 
-### Using both IPv4 and IPv6 on FreeBSD
 
-wsdd tries to service both IPv4 and IPv6 requests. On most Linux systems, IPv6
-sockets handle IPv4 traffic as well (/proc/sys/net/ipv6/bindv6only must be set
-to 0). However on FreeBSD (and may be other BSDs as well) IPv6 sockets only
-handle traffic of that address family. If not specified otherwise, wsdd emits
-both IPv4 and IPv6 multicast messages with according transport addresses in the
-payload. Those transport addresses will be used by the receiving Windows host
-to connect to the HTTP service. On FreeBSD, the HTTP service is only bound to
-IPv6 by default. So, attempts to connect via IPv4 will fail.  This prevents
-wsdd hosts from appearing in the Network view.  If you want to support both
-protocols on FreeBSD run two instances of wsdd with the -4/--ipv4only and
--6/--ipv6only option, respectively.
 
 ### Using only IPv6 on FreeBSD
 
