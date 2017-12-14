@@ -1,16 +1,17 @@
 # wsdd
 
-Enable (Samba) hosts, like your local NAS device, to be found by Web Service
-Discovery Clients like Windows.
+wsdd implements a Web Service Discovery host daemon. This enables (Samba)
+hosts, like your local NAS device, to be found by Web Service Discovery Clients
+like Windows.
 
-## Purpose
+# Purpose
 
 Since NetBIOS discovery is not supported by Windows anymore, wsdd makes hosts
 to appear in Windows again using the Web Service Discovery method. This is
-beneficial for devices running Samba, like NAS or File Sharing Servers on your
+beneficial for devices running Samba, like NAS or file sharing servers on your
 local network.
 
-### Background
+## Background
 
 With Windows 10 Build 1511, support for SMBv1 and thus NetBIOS device discovery
 was disabled by default.  Depending on the actual edition, later versions of
@@ -26,27 +27,28 @@ possible even if the host running Samba is not listed in the Network
 Neighborhood. You can still connect using the host name (given that name
 resolution works) or IP address. So you can have network drives and use shared
 folders as well. In addition, there is a patch lurking around in the Samba
-bugtracker since 2015. So it may happen that this feature gets integrated into
+bug tracker since 2015. So it may happen that this feature gets integrated into
 Samba at some time in the future.
 
-## Requirements
+# Requirements
 
 wsdd requires Python 3 only. It runs on Linux and FreeBSD. Other Unixes, such
 as OpenBSD or NetBSD, might work as well but were not tested.
 
 Although Samba is not strictly required by wsdd itself, it makes sense to run
-wsdd only on hosts with a running Samba daemon.
+wsdd only on hosts with a running Samba daemon. Note that the OpenRC/Gentoo
+init script depends on the Samba service.
 
-## Installation and Usage
+# Installation and Usage
 
 No installation steps are required. Just place the wsdd.py file anywhere you
-want to, possibly rename it to wsdd, and run it from there. There are no
-configuration files. However, the firewall might be configured to enable
-functionality. For options, see the according section below. No special
-privileges are required to run wsdd, so it is advisable to run the service as an
-unprivileged user such as _nobody_.
+want to, rename it to wsdd, and run it from there. The init scripts/unit files
+assume that wsdd is installed under /usr/bin/wsdd or /usr/local/bin/wsdd in
+case of FreeBSD. There are no configuration files. No special privileges are
+required to run wsdd, so it is advisable to run the service as an unprivileged
+user such as _nobody_.
 
-### Firewall Setup
+## Firewall Setup
 
 Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
 IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
@@ -55,7 +57,7 @@ multicast address (`fe02::c`) is used.
 Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
 allowed.
 
-### Options
+## Options
 
  * `-i INTERFACE`, `--interface INTERFACE`
 
@@ -115,7 +117,7 @@ allowed.
 	 Restrict to the given address family. If both options are specified no
 	 addreses will be available and wsdd will exit.
 
-### Example Usage
+## Example Usage
 
  * handle traffic on eth0 only, but only with IPv6 addresses
 
@@ -131,46 +133,83 @@ allowed.
 
     `wsdd -v -w $SMB_GROUP`
 
-## Known Issues
+## Technical Description
 
+(Read the source for more details)
 
+For each specified (or all) network interfaces, except for loopback, an UDP
+multicast socket for message reception, an UDP send socket for replying
+messages using unicast, and a listening TCP socket is created. This is done for
+both the IPv4 and the IPv6 address family if not configured otherwise by the
+command line arguments (see above). Upon startup a _Hello_ message is sent.
+When wsdd terminates due to a SIGTERM signal or keyboard interrupt, a graceful
+shutdown is performed by sending a _Bye_ message. I/O multiplexing is used to
+handle network traffic of the different sockets within a single process.
 
+# Known Issues
 
+## Security
 
-### Using only IPv6 on FreeBSD
+wsdd does not implement any security feature, e.g. by using TLS for the http
+service. This is because wsdd's intended usage is within private, i.e. home,
+LANs. The _Hello_ message contains the hosts transport address, i.e. the IP
+address which speeds up discovery (avoids _Resolve_ message).
+
+## Concurrent Handling of Requests
+
+When a UDP request is answered, wsdd send replies according to Appendix I of
+the SOAP over UDP specification in a blocking fashion. That is, messages are
+repeatedly sent with a timeout between multiple sends. This blocks processing
+of concurrently arrived requests for roughly 2.5 seconds (due to the
+requirements from the specification). With multiple outstanding requests and
+according replies this can defer request processing even longer. As a
+consequence of this delay, a WSD client can consider one of its requests (such
+as a _Resolve_ message) as unanswered and following traffic might be dropped by
+the firewall.
+
+A technical solution for this can be a global queue where those messages are
+stored into instead of blocking waits, or a complete rewrite to a non-blocking
+version with timers that expire on the resend intervals. This is currently left
+as a task to the interested reader. On small private LANs this issues should be
+negligible.
+
+## Using only IPv6 on FreeBSD
 
 If wsdd is running on FreeBSD using IPv6 only, the host running wsdd may not be
 reliably discovered. The reason appears to be that Windows is not always able
-to connect to the HTTP service. As a workaround, run wsdd with IPv4 only.
+to connect to the HTTP service for unknown reasons. As a workaround, run wsdd
+with IPv4 only.
 
-## Development
+# Contributing
 
 Contributions are welcome. Please ensure PEP8 compliance when submitting
-patches.
+patches or pull requests.
 
-## Licence
+# Licence
 
 The code is licensed under the [MIT license](https://opensource.org/licenses/MIT).
 
-## Acknowledgements
+# Acknowledgements
 
 Thanks to Jose M. Prieto and his colleague Tobias Waldvogel who wrote the
 mentioned patch for Samba to provide WSD and LLMNR support. A look at their
 patch set made cross-checking the WSD messages easier.
 
-## References
+# References
 
-### Technical Specification
+## Technical Specification
 
  * [Web Services Dynamic Discovery](http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf)
 
  * [SOAP-over-UDP (used during multicast)](http://specs.xmlsoap.org/ws/2004/09/soap-over-udp/soap-over-udp.pdf)
 
- * [MSDN Documentationon on Publication Services Data Structure](https://msdn.microsoft.com/en-us/library/hh442048.aspx)
+ * [MSDN Documentation on Publication Services Data Structure](https://msdn.microsoft.com/en-us/library/hh442048.aspx)
+
+ * [MSDN on Windows WSD Compliance](https://msdn.microsoft.com/en-us/library/windows/desktop/bb736564.aspx)
 
  * ...and the standards referenced within the above.
 
-### Documentation and Discussion on Windows/WSD
+## Documentation and Discussion on Windows/WSD
 
  * [Microsoft help entry on SMBv1 is not installed by default in Windows 10 Fall Creators Update and Windows Server, version 1709](https://support.microsoft.com/en-us/help/4034314/smbv1-is-not-installed-windows-10-and-windows-server-version-1709)
 
@@ -180,4 +219,3 @@ patch set made cross-checking the WSD messages easier.
    Note: Solutions suggest to go back to SMBv1 protocol which is deprecated! Do not follow this advice.
 
  * [Discussion in Synology Community Forum](https://forum.synology.com/enu/viewtopic.php?f=49&t=106924)
-
