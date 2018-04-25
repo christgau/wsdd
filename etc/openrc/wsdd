@@ -34,6 +34,6 @@ start() {
 
 stop() {
 	ebegin "Stopping ${RC_SVCNAME} daemon"
-	start-stop-daemon --stop --pidfile /var/run/${RC_SVCNAME}.pid --exec ${WSDD_EXEC}
+	start-stop-daemon --stop --retry 10 --pidfile /var/run/${RC_SVCNAME}.pid --exec ${WSDD_EXEC}
 	eend $?
 }
