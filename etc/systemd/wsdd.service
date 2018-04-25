@@ -1,5 +1,5 @@
 [Unit]
-Description=Web Servicess Dynamic Discovery Host daemon
+Description=Web Services Dynamic Discovery host daemon
 After=network.target
 
 [Service]
