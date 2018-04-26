@@ -51,8 +51,8 @@ if_addrs._fields_ = [('next', ctypes.POINTER(if_addrs)),
                      ('netmask', ctypes.POINTER(sockaddr))]
 
 
-# simple HTTP server with IPv6 support
 class HTTPv6Server(http.server.HTTPServer):
+    """Simple HTTP server with IPv6 support"""
     address_family = socket.AF_INET6
 
     def server_bind(self):
@@ -60,9 +60,11 @@ class HTTPv6Server(http.server.HTTPServer):
         super().server_bind()
 
 
-# class for handling multicast traffic on a given interface for a
-# given address family. It provides multicast sender and receiver sockets
 class MulticastInterface:
+    """
+    A class for handling multicast traffic on a given interface for a
+    given address family. It provides multicast sender and receiver sockets
+    """
     def __init__(self, family, address, intf_name):
         self.address = address
         self.family = family
@@ -213,10 +215,14 @@ def wsd_add_xaddr(parent, transport_addr):
             transport_addr, WSD_HTTP_PORT, args.uuid)
 
 
-# build a WSD message with a given action string including SOAP header
-# optionally as a response to another message (given by its header) and
-# with optional a response that serves as the message's body
 def wsd_build_message(to_addr, action_str, request_header, response):
+    """
+    Build a WSD message with a given action string including SOAP header.
+
+    The message can be constructed based on a response to another
+    message (given by its header) and with a optional response that
+    serves as the message's body
+    """
     global wsd_message_number
 
     env = ElementTree.Element('soap:Envelope')
@@ -263,7 +269,7 @@ def wsd_handle_probe(probe):
     scopes = probe.find('./wsd:Scopes', namespaces)
 
     if scopes:
-        # think: send fault message (see p. 21 in WSD)
+        # THINK: send fault message (see p. 21 in WSD)
         raise ValueError('scopes are not supported but where probed')
 
     if not types == WSD_TYPE_DEVICE:
@@ -336,9 +342,12 @@ def wsd_handle_get():
     return metadata
 
 
-# check for a duplicated message
-# implements SOAP-over-UDP Appendix II Item 2
 def wsd_is_duplicated_msg(msg_id):
+    """
+    Check for a duplicated message.
+
+    Implements SOAP-over-UDP Appendix II Item 2
+    """
     if msg_id in wsd_known_messages:
         return True
 
@@ -349,8 +358,10 @@ def wsd_is_duplicated_msg(msg_id):
     return False
 
 
-# handle a WSD message that might be received by a MulticastInterface class
 def wsd_handle_message(data, interface):
+    """
+    handle a WSD message that might be received by a MulticastInterface class
+    """
     tree = ElementTree.fromstring(data)
     header = tree.find('./soap:Header', namespaces)
     msg_id = header.find('./wsa:MessageID', namespaces).text
@@ -392,8 +403,8 @@ def wsd_handle_message(data, interface):
         return None
 
 
-# class for handling WSD multi/unicast request coming from UDP datagrams
 class WSDUdpRequestHandler():
+    """Class for handling WSD requests coming from UDP datagrams."""
     def __init__(self, interface):
         self.interface = interface
 
@@ -403,8 +414,8 @@ class WSDUdpRequestHandler():
         if msg:
             self.send_datagram(msg, address=address)
 
-    # WS-Discovery, Section 4.1, Hello message
     def send_hello(self):
+        """WS-Discovery, Section 4.1, Hello message"""
         hello = ElementTree.Element('wsd:Hello')
         wsd_add_endpoint_reference(hello)
         # THINK: Microsoft does not send the transport address here due
@@ -415,17 +426,20 @@ class WSDUdpRequestHandler():
         msg = wsd_build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
         self.send_datagram(msg, msg_type='Hello')
 
-    # WS-Discovery, Section 4.2, Bye message
     def send_bye(self):
+        """WS-Discovery, Section 4.2, Bye message"""
         bye = ElementTree.Element('wsd:Bye')
         wsd_add_endpoint_reference(bye)
 
         msg = wsd_build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
         self.send_datagram(msg, msg_type='Bye')
 
-    # transmit a WSD (SOAP) message via the own MulticastInterface
-    # implements SOAP over UDP, Appendix I
     def send_datagram(self, msg, address=None, msg_type=None):
+        """
+        Transmit a WSD (SOAP) message via the own MulticastInterface
+
+        Implements SOAP over UDP, Appendix I.
+        """
         if not address:
             address = self.interface.multicast_address
 
@@ -445,8 +459,8 @@ class WSDUdpRequestHandler():
             t = min(t * 2, UDP_UPPER_DELAY)
 
 
-# class for handling WSD requests coming over HTTP
 class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Class for handling WSD requests coming over HTTP"""
     def log_message(self, fmt, *args):
         logger.info(fmt % args)
 
@@ -470,10 +484,8 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             s.send_error(500)
 
 
-# get all IPv4/v6 addresses of all interfaces except loopback and
-# non-link-local v6 addresses
 def enumerate_host_interfaces():
-    # get all addresses of all installed interfaces
+    """Get all addresses of all installed interfaces, except loopback"""
     libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
     addr = ctypes.POINTER(if_addrs)()
     retval = libc.getifaddrs(ctypes.byref(addr))
@@ -521,7 +533,6 @@ def sigterm_handler(signum, frame):
         sys.exit(0)
 
 
-# handle command line arguments and enumerate interface list
 def parse_args():
     global args, logger
 
@@ -595,10 +606,12 @@ def parse_args():
         ElementTree.register_namespace(prefix, uri)
 
 
-# multicast handling: send Hello message on startup, receive from multicast
-# sockets and handle the messages, and emit Bye message when process gets
-# terminated by signal
 def serve_wsd_requests(addresses):
+    """
+    Multicast handling: send Hello message on startup, receive from multicast
+    sockets and handle the messages, and emit Bye message when process gets
+    terminated by signal
+    """
     s = selectors.DefaultSelector()
     udp_srvs = []
 
