@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# PROVIDE: wsdd
+# REQUIRE: DAEMON samba_server
+# BEFORE: login
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name=wsdd
+rcvar=wsdd_enable
+
+wsdd_smb_config_file="/usr/local/etc/smb.conf"
+wsdd_group="$(grep -i '^[[:space:]]*workgroup[[:space:]]*=' $wsdd_smb_config_file | cut -f2 -d= | tr -d '[:blank:]')"
+
+command="/usr/sbin/daemon"
+command_args="-u daemon -S /usr/local/bin/wsdd -w ${wsdd_group:-WORKGROUP}"
+
+load_rc_config $name
+run_rc_command "$1"
