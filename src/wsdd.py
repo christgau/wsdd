@@ -447,7 +447,7 @@ class WSDUdpRequestHandler():
             logger.debug('outgoing {0} message via {1} to {2}'.format(
                 msg_type, self.interface.interface, address))
 
-        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY) / 1000
+        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
         for i in range(MULTICAST_UDP_REPEAT):
             logger.debug('retransmit #{0}, sleeping {1} s'.format(i, t))
             try:
@@ -455,7 +455,7 @@ class WSDUdpRequestHandler():
             except:
                 logger.exception('error send multicast datagram')
 
-            time.sleep(t)
+            time.sleep(t / 1000)
             t = min(t * 2, UDP_UPPER_DELAY)
 
 
