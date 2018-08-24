@@ -155,24 +155,6 @@ service. This is because wsdd's intended usage is within private, i.e. home,
 LANs. The _Hello_ message contains the hosts transport address, i.e. the IP
 address which speeds up discovery (avoids _Resolve_ message).
 
-## Concurrent Handling of Requests
-
-When a UDP request is answered, wsdd send replies according to Appendix I of
-the SOAP over UDP specification in a blocking fashion. That is, messages are
-repeatedly sent with a timeout between multiple sends. This blocks processing
-of concurrently arrived requests for roughly 2.5 seconds (due to the
-requirements from the specification). With multiple outstanding requests and
-according replies this can defer request processing even longer. As a
-consequence of this delay, a WSD client can consider one of its requests (such
-as a _Resolve_ message) as unanswered and following traffic might be dropped by
-the firewall.
-
-A technical solution for this can be a global queue where those messages are
-stored into instead of blocking waits, or a complete rewrite to a non-blocking
-version with timers that expire on the resend intervals. This is currently left
-as a task to the interested reader. On small private LANs this issues should be
-negligible.
-
 ## Using only IPv6 on FreeBSD
 
 If wsdd is running on FreeBSD using IPv6 only, the host running wsdd may not be

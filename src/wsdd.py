@@ -178,6 +178,7 @@ WSD_MAX_LEN = 32767
 
 # SOAP/UDP transmission constants
 MULTICAST_UDP_REPEAT = 4
+UNICAST_UDP_REPEAT = 2
 UDP_MIN_DELAY = 50
 UDP_MAX_DELAY = 250
 UDP_UPPER_DELAY = 500
@@ -186,6 +187,7 @@ UDP_UPPER_DELAY = 500
 wsd_known_messages = collections.deque([])
 wsd_message_number = 1
 wsd_instance_id = int(time.time())
+send_queue = []
 
 args = None
 logger = None
@@ -412,7 +414,7 @@ class WSDUdpRequestHandler():
         msg, address = self.interface.recv_socket.recvfrom(WSD_MAX_LEN)
         msg = wsd_handle_message(msg, self.interface)
         if msg:
-            self.send_datagram(msg, address=address)
+            self.enqueue_datagram(msg, address=address)
 
     def send_hello(self):
         """WS-Discovery, Section 4.1, Hello message"""
@@ -424,7 +426,7 @@ class WSDUdpRequestHandler():
         wsd_add_metadata_version(hello)
 
         msg = wsd_build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
-        self.send_datagram(msg, msg_type='Hello')
+        self.enqueue_datagram(msg, msg_type='Hello')
 
     def send_bye(self):
         """WS-Discovery, Section 4.2, Bye message"""
@@ -432,11 +434,11 @@ class WSDUdpRequestHandler():
         wsd_add_endpoint_reference(bye)
 
         msg = wsd_build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
-        self.send_datagram(msg, msg_type='Bye')
+        self.enqueue_datagram(msg, msg_type='Bye')
 
-    def send_datagram(self, msg, address=None, msg_type=None):
+    def enqueue_datagram(self, msg, address=None, msg_type=None):
         """
-        Transmit a WSD (SOAP) message via the own MulticastInterface
+        Add an outgoing WSD (SOAP) message to the queue of outstanding messages
 
         Implements SOAP over UDP, Appendix I.
         """
@@ -444,18 +446,19 @@ class WSDUdpRequestHandler():
             address = self.interface.multicast_address
 
         if msg_type:
-            logger.debug('outgoing {0} message via {1} to {2}'.format(
+            logger.debug('scheduling {0} message via {1} to {2}'.format(
                 msg_type, self.interface.interface, address))
 
-        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
-        for i in range(MULTICAST_UDP_REPEAT):
-            logger.debug('retransmit #{0}, sleeping {1} s'.format(i, t))
-            try:
-                self.interface.send_socket.sendto(msg, address)
-            except:
-                logger.exception('error send multicast datagram')
+        msg_count = (
+            MULTICAST_UDP_REPEAT
+            if address == self.interface.multicast_address
+            else UNICAST_UDP_REPEAT)
 
-            time.sleep(t / 1000)
+        due_time = time.time()
+        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
+        for i in range(msg_count):
+            send_queue.append([due_time, self.interface, address, msg])
+            due_time += t / 1000
             t = min(t * 2, UDP_UPPER_DELAY)
 
 
@@ -606,6 +609,41 @@ def parse_args():
         ElementTree.register_namespace(prefix, uri)
 
 
+def send_outstanding_messages(block=False):
+    """
+    Send all queued datagrams for which the timeout has been reached. If block
+    is true then all queued messages will be sent but with their according
+    delay.
+    """
+    if len(send_queue) == 0:
+        return None
+
+    # reverse ordering for faster removal of the last element
+    send_queue.sort(key=lambda x: x[0], reverse=True)
+
+    # Emit every message that is "too late". Note that in case the system
+    # time jumps backward, multiple outstanding message which have a
+    # delay between them are sent out without that delay.
+    now = time.time()
+    while len(send_queue) > 0 and (send_queue[-1][0] <= now or block):
+        interface = send_queue[-1][1]
+        addr = send_queue[-1][2]
+        msg = send_queue[-1][3]
+        interface.send_socket.sendto(msg, addr)
+
+        del send_queue[-1]
+        if block and len(send_queue) > 0:
+            delay = send_queue[-1][0] - now
+            if delay > 0:
+                time.sleep(delay)
+                now = time.time()
+
+    if len(send_queue) > 0 and not block:
+        return send_queue[-1][0] - now
+
+    return None
+
+
 def serve_wsd_requests(addresses):
     """
     Multicast handling: send Hello message on startup, receive from multicast
@@ -636,7 +674,8 @@ def serve_wsd_requests(addresses):
 
         while True:
             try:
-                events = s.select()
+                timeout = send_outstanding_messages()
+                events = s.select(timeout)
                 for key, mask in events:
                     key.data.handle_request()
             except (SystemExit, KeyboardInterrupt):
@@ -651,6 +690,8 @@ def serve_wsd_requests(addresses):
     # say goodbye
     for srv in udp_srvs:
         srv.send_bye()
+
+    send_outstanding_messages(True)
 
 
 def main():
