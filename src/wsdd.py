@@ -499,7 +499,7 @@ def enumerate_host_interfaces():
     ptr = addr
     while ptr:
         deref = ptr[0]
-        family = deref.addr[0].family
+        family = deref.addr[0].family if deref.addr else None
         if family == socket.AF_INET:
             addrs.append((
                 deref.name.decode(), family,
