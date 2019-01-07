@@ -13,7 +13,7 @@ local network.
 
 ## Background
 
-With Windows 10 Build 1511, support for SMBv1 and thus NetBIOS device discovery
+With Windows 10 version 1511, support for SMBv1 and thus NetBIOS device discovery
 was disabled by default.  Depending on the actual edition, later versions of
 Windows starting from version 1709 ("Fall Creators Update") do not allow the
 installation of the SMBv1 client anymore.  This causes hosts running Samba not
@@ -43,7 +43,7 @@ init script depends on the Samba service.
 
 No installation steps are required. Just place the wsdd.py file anywhere you
 want to, rename it to wsdd, and run it from there. The init scripts/unit files
-assume that wsdd is installed under /usr/bin/wsdd or /usr/local/bin/wsdd in
+assume that wsdd is installed under `/usr/bin/wsdd` or `/usr/local/bin/wsdd` in
 case of FreeBSD. There are no configuration files. No special privileges are
 required to run wsdd, so it is advisable to run the service as an unprivileged
 user such as _nobody_.
@@ -61,7 +61,7 @@ allowed.
 
  * `-i INTERFACE`, `--interface INTERFACE`
 
-     Specify on which interfaces wsdd will be listing on. If no interfaces are
+     Specify on which interfaces wsdd will be listening on. If no interfaces are
      specified, all interfaces are used. The loop-back interface is never used,
      even when it was explicitly specified. For interfaces with IPv6 addresses,
      only link-local addresses will be used for announcing the host on the
