@@ -177,7 +177,7 @@ Thanks to Jose M. Prieto and his colleague Tobias Waldvogel who wrote the
 mentioned patch for Samba to provide WSD and LLMNR support. A look at their
 patch set made cross-checking the WSD messages easier.
 
-# References
+# References and Further Reading
 
 ## Technical Specification
 
@@ -201,3 +201,12 @@ patch set made cross-checking the WSD messages easier.
    Note: Solutions suggest to go back to SMBv1 protocol which is deprecated! Do not follow this advice.
 
  * [Discussion in Synology Community Forum](https://forum.synology.com/enu/viewtopic.php?f=49&t=106924)
+
+## Other stuff
+
+ * Meanwhile, there is a [C implementation of a WSD daemon](https://github.com/Andy2244/wsdd2), named wsdd2.
+   This one also includes LLMNR which wsdd lacks. However, LLMNR may not be required depending on the actual
+   network/name resolution setup.
+
+ * [OpenWRT includes](https://github.com/openwrt/packages/pull/5563) the above C implementation.
+   So OpenWRT users are unlikely to need an installation of wsdd.
