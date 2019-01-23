@@ -272,10 +272,13 @@ def wsd_handle_probe(probe):
 
     if scopes:
         # THINK: send fault message (see p. 21 in WSD)
-        raise ValueError('scopes are not supported but where probed')
+        logger.warn('Scopes are not supported but were probed ({}).'.format(
+            scopes))
+        return None
 
     if not types == WSD_TYPE_DEVICE:
-        raise ValueError('unknown discovery type ({0})'.format(types))
+        logger.debug('unknown discovery type ({0}) during probe'.format(types))
+        return None
 
     matches = ElementTree.Element('wsd:ProbeMatches')
     match = ElementTree.SubElement(matches, 'wsd:ProbeMatch')
@@ -289,10 +292,13 @@ def wsd_handle_probe(probe):
 def wsd_handle_resolve(resolve, xaddr):
     addr = resolve.find('./wsa:EndpointReference/wsa:Address', namespaces)
     if addr is None:
-        raise ValueError('invalid resolve request: missing endpoint address')
+        logger.debug('invalid resolve request: missing endpoint address')
+        return None
 
     if not addr.text == args.uuid.urn:
-        raise ValueError('invalid resolve request: address does not match')
+        logger.debug(('invalid resolve request: address ({}) does not match '
+                      'own one ({})').format(addr.text, args.uuid.urn))
+        return None
 
     matches = ElementTree.Element('wsd:ResolveMatches')
     match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
@@ -382,18 +388,14 @@ def wsd_handle_message(data, interface):
     # if message came over multicast interface, check for duplicates
     if action == WSD_PROBE:
         probe = body.find('./wsd:Probe', namespaces)
-        return wsd_build_message(
-            WSA_ANON,
-            WSD_PROBE_MATCH,
-            header,
-            wsd_handle_probe(probe))
+        response = wsd_handle_probe(probe)
+        return wsd_build_message(WSA_ANON, WSD_PROBE_MATCH, header,
+                                 response) if response else None
     elif action == WSD_RESOLVE:
         resolve = body.find('./wsd:Resolve', namespaces)
-        return wsd_build_message(
-            WSA_ANON,
-            WSD_RESOLVE_MATCH,
-            header,
-            wsd_handle_resolve(resolve, interface.transport_address))
+        response = wsd_handle_resolve(resolve, interface.transport_address)
+        return wsd_build_message(WSA_ANON, WSD_RESOLVE_MATCH, header,
+                                 response) if response else None
     elif action == WSD_GET:
         return wsd_build_message(
             WSA_ANON,
