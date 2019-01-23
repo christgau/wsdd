@@ -44,6 +44,7 @@ else:
 class if_addrs(ctypes.Structure):
     pass
 
+
 if_addrs._fields_ = [('next', ctypes.POINTER(if_addrs)),
                      ('name', ctypes.c_char_p),
                      ('flags', ctypes.c_uint),
@@ -374,10 +375,10 @@ def wsd_handle_message(data, interface):
     header = tree.find('./soap:Header', namespaces)
     msg_id = header.find('./wsa:MessageID', namespaces).text
 
-    if interface:
-        if wsd_is_duplicated_msg(msg_id):
-            logger.debug('known message ({0}): dropping it'.format(msg_id))
-            return None
+    # if message came over multicast interface, check for duplicates
+    if interface and wsd_is_duplicated_msg(msg_id):
+        logger.debug('known message ({0}): dropping it'.format(msg_id))
+        return None
 
     response = None
     action = header.find('./wsa:Action', namespaces).text
@@ -385,7 +386,6 @@ def wsd_handle_message(data, interface):
 
     logger.info('handling WSD {0} type message ({1})'.format(action, msg_id))
     logger.debug('incoming message content is {0}'.format(data))
-    # if message came over multicast interface, check for duplicates
     if action == WSD_PROBE:
         probe = body.find('./wsd:Probe', namespaces)
         response = wsd_handle_probe(probe)
