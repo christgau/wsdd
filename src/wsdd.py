@@ -549,8 +549,8 @@ def parse_args():
         action='append', default=[])
     parser.add_argument(
         '-H', '--hoplimit',
-        help='hop limit for multicast packets (default = 1)',
-        action='append', default=1)
+        help='hop limit for multicast packets (default = 1)', type=int,
+        default=1)
     parser.add_argument(
         '-u', '--uuid',
         help='UUID for the target device',
