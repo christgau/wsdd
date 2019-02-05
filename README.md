@@ -210,3 +210,5 @@ patch set made cross-checking the WSD messages easier.
 
  * [OpenWRT includes](https://github.com/openwrt/packages/pull/5563) the above C implementation.
    So OpenWRT users are unlikely to need an installation of wsdd.
+
+ * [FreeNAS](https://redmine.ixsystems.com/issues/72099) appears to have wsdd included in the distribution.
