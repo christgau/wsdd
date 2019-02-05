@@ -48,6 +48,12 @@ case of FreeBSD. There are no configuration files. No special privileges are
 required to run wsdd, so it is advisable to run the service as an unprivileged
 user such as _nobody_.
 
+The `etc` directory of the repo contains sample configuration files for
+different init(1) systems, namely FreeBSD's rc.d, Gentoo's openrc, and systemd
+which is used in most contemporary Linux distros. Those files may be used as
+templates for their actual usage. They a likely to require adjustments to the
+actual distribution/installation where they are to be used.
+
 ## Firewall Setup
 
 Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
