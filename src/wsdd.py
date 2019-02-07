@@ -90,14 +90,13 @@ class MulticastInterface:
             self.listen_address))
 
     def init_v6(self):
-        self.multicast_address = (
-                WSD_MCAST_GRP_V6,
-                WSD_UDP_PORT, 0x575C,
-                socket.if_nametoindex(self.interface))
+        idx = socket.if_nametoindex(self.interface)
+        self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
+
         # v6: member_request = { multicast_addr, intf_idx }
         mreq = (
             socket.inet_pton(self.family, WSD_MCAST_GRP_V6) +
-            struct.pack('@I', socket.if_nametoindex(self.interface)))
+            struct.pack('@I', idx))
         self.recv_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
         self.recv_socket.setsockopt(
@@ -107,16 +106,14 @@ class MulticastInterface:
         self.recv_socket.bind(('', WSD_UDP_PORT))
 
         # bind to network interface, i.e. scope
-        self.send_socket.bind(
-            ('::', 0, 0, socket.if_nametoindex(self.interface)))
+        self.send_socket.bind(('::', 0, 0, idx))
         self.send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
+        self.send_socket.setsockopt(
+            socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
 
         self.transport_address = '[{0}]'.format(self.address)
-        self.listen_address = (
-                self.address,
-                WSD_HTTP_PORT, 0,
-                socket.if_nametoindex(self.interface))
+        self.listen_address = (self.address, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self):
         self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
@@ -130,6 +127,8 @@ class MulticastInterface:
             socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
         self.recv_socket.bind((WSD_MCAST_GRP_V4, WSD_UDP_PORT))
 
+        self.send_socket.setsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
         self.send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
 
