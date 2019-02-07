@@ -631,7 +631,11 @@ def send_outstanding_messages(block=False):
         interface = send_queue[-1][1]
         addr = send_queue[-1][2]
         msg = send_queue[-1][3]
-        interface.send_socket.sendto(msg, addr)
+        try:
+            interface.send_socket.sendto(msg, addr)
+        except Exception as e:
+            logger.error('error while sending packet on {}: {}'.format(
+                interface.interface, e))
 
         del send_queue[-1]
         if block and len(send_queue) > 0:
