@@ -100,13 +100,13 @@ class MulticastInterface:
         self.recv_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
         self.recv_socket.setsockopt(
-            socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
-        self.recv_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
         self.recv_socket.bind((WSD_MCAST_GRP_V6, WSD_UDP_PORT))
 
         # bind to network interface, i.e. scope
         self.send_socket.bind(('::', 0, 0, idx))
+        self.send_socket.setsockopt(
+            socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
         self.send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
         self.send_socket.setsockopt(
@@ -127,12 +127,12 @@ class MulticastInterface:
 
         self.recv_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        self.recv_socket.setsockopt(
-            socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
         self.recv_socket.bind((WSD_MCAST_GRP_V4, WSD_UDP_PORT))
 
         self.send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
+        self.send_socket.setsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
         self.send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
 
