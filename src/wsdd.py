@@ -101,10 +101,14 @@ class MulticastInterface:
             socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
         self.recv_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-        self.recv_socket.bind((WSD_MCAST_GRP_V6, WSD_UDP_PORT))
 
-        # bind to network interface, i.e. scope
-        self.send_socket.bind(('::', 0, 0, idx))
+        # bind to network interface, i.e. scope and handle OS differences,
+        # see Stevens: Unix Network Programming, Section 21.6, last paragraph
+        try:
+            self.recv_socket.bind((WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0, idx))
+        except OSError:
+            self.send_socket.bind(('::', 0, 0, idx))
+
         self.send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
         self.send_socket.setsockopt(
@@ -124,10 +128,13 @@ class MulticastInterface:
             socket.inet_pton(self.family, WSD_MCAST_GRP_V4) +
             socket.inet_pton(self.family, self.address) +
             struct.pack('@I', idx))
-
         self.recv_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        self.recv_socket.bind((WSD_MCAST_GRP_V4, WSD_UDP_PORT))
+
+        try:
+            self.recv_socket.bind((WSD_MCAST_GRP_V4, WSD_UDP_PORT))
+        except OSError:
+            self.recv_socket.bind(('', WSD_UDP_PORT))
 
         self.send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
