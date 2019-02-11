@@ -470,7 +470,7 @@ class WSDUdpRequestHandler():
 class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
     """Class for handling WSD requests coming over HTTP"""
     def log_message(self, fmt, *args):
-        logger.info(fmt % args)
+        logger.info("{} - - ".format(self.address_string()) + fmt % args)
 
     def do_POST(s):
         if s.path != '/' + str(args.uuid):
