@@ -9,7 +9,7 @@
 # see http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf and
 # related documents for details (look at README for more references)
 #
-# (c) Steffen Christgau, 2017
+# (c) Steffen Christgau, 2017-2019
 
 import sys
 import signal
