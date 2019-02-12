@@ -634,7 +634,7 @@ def send_outstanding_messages(block=False):
     send_queue.sort(key=lambda x: x[0], reverse=True)
 
     # Emit every message that is "too late". Note that in case the system
-    # time jumps backward, multiple outstanding message which have a
+    # time jumps forward, multiple outstanding message which have a
     # delay between them are sent out without that delay.
     now = time.time()
     while len(send_queue) > 0 and (send_queue[-1][0] <= now or block):
