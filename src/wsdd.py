@@ -107,7 +107,7 @@ class MulticastInterface:
         try:
             self.recv_socket.bind((WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0, idx))
         except OSError:
-            self.send_socket.bind(('::', 0, 0, idx))
+            self.recv_socket.bind(('::', 0, 0, idx))
 
         self.send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
