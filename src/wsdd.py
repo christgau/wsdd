@@ -576,7 +576,9 @@ def parse_args():
     parser.add_argument(
         '-n', '--hostname',
         help='override (NetBIOS) hostname to be used (default hostname)',
-        default=socket.gethostname())
+        default=socket.gethostname().split('.', 1)[0])
+        # Expected is hostname only, but on FreeNAS (at least) 
+        # this returns FQDN, so detect and trim any domain "in case"
     parser.add_argument(
         '-w', '--workgroup',
         help='set workgroup name (default WORKGROUP)',
@@ -585,6 +587,10 @@ def parse_args():
         '-t', '--nohttp',
         help='disable http service (for debugging, e.g.)',
         action='store_true')
+    parser.add_argument(
+        '-l', '--logfile',
+        help='Path of log file (default: write to console). Caution: no limit is set on log size',
+        default=None)
     parser.add_argument(
         '-4', '--ipv4only',
         help='use only IPv4 (default = off)',
@@ -603,12 +609,20 @@ def parse_args():
     else:
         log_level = logging.WARNING
 
-    logging.basicConfig(level=log_level, format=(
-        '%(asctime)s:%(name)s %(levelname)s(pid %(process)d): %(message)s'))
+    log_format = '%(asctime)s:%(name)s %(levelname)s(pid %(process)d): %(message)s'
+
+    if not args.logfile:
+        logging.basicConfig(level=log_level, format=(log_format))
+    else:
+        logging.basicConfig(level=log_level, format=(log_format), filename=args.logfile)
+
     logger = logging.getLogger('wsdd')
 
     if not args.interface:
         logger.warning('no interface given, using all interfaces')
+
+    if args.logfile:
+        print('logging to ' + args.logfile)
 
     if not args.uuid:
         args.uuid = uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
