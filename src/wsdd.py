@@ -576,7 +576,8 @@ def parse_args():
     parser.add_argument(
         '-n', '--hostname',
         help='override (NetBIOS) hostname to be used (default hostname)',
-        default=socket.gethostname())
+        # use only the local part of a possible FQDN
+        default=socket.gethostname().partition('.')[0])
     parser.add_argument(
         '-w', '--workgroup',
         help='set workgroup name (default WORKGROUP)',

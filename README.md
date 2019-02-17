@@ -97,7 +97,8 @@ allowed.
  * `-n HOSTNAME`, `--hostname HOSTNAME`
 
      Override the host name wsdd uses during discovery. By default the machine's
-     host name is used (look at hostname(1)).
+     host name is used (look at hostname(1)). Only the host name part of a
+     possible FQDN will be used in the default case.
 
  * `-w WORKGROUP`, `--workgroup WORKGROUP`
 
