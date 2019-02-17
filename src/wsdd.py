@@ -618,11 +618,11 @@ def parse_args():
 
     logger = logging.getLogger('wsdd')
 
-    if not args.interface:
-        logger.warning('no interface given, using all interfaces')
-
     if args.logfile:
         print('logging to ' + args.logfile)
+
+    if not args.interface:
+        logger.warning('no interface given, using all interfaces')
 
     if not args.uuid:
         args.uuid = uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
