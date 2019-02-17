@@ -51,7 +51,7 @@ user such as _nobody_.
 The `etc` directory of the repo contains sample configuration files for
 different init(1) systems, namely FreeBSD's rc.d, Gentoo's openrc, and systemd
 which is used in most contemporary Linux distros. Those files may be used as
-templates for their actual usage. They a likely to require adjustments to the
+templates for their actual usage. They are likely to require adjustments to the
 actual distribution/installation where they are to be used.
 
 ## Firewall Setup
