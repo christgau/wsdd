@@ -594,6 +594,10 @@ def parse_args():
         '-6', '--ipv6only',
         help='use IPv6 (default = off)',
         action='store_true')
+    parser.add_argument(
+        '-s', '--shortlog',
+        help='log only level and message',
+        action='store_true')
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -604,8 +608,13 @@ def parse_args():
     else:
         log_level = logging.WARNING
 
-    logging.basicConfig(level=log_level, format=(
-        '%(asctime)s:%(name)s %(levelname)s(pid %(process)d): %(message)s'))
+    if args.shortlog:
+        fmt = '%(levelname)s: %(message)s'
+    else:
+        fmt = ('%(asctime)s:%(name)s %(levelname)s(pid %(process)d): '
+               '%(message)s')
+
+    logging.basicConfig(level=log_level, format=fmt)
     logger = logging.getLogger('wsdd')
 
     if not args.interface:

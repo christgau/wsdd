@@ -8,7 +8,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/wsdd
+ExecStart=/usr/bin/wsdd --shortlog
 ; Replace those with an unprivledged user/group that matches your environment,
 ; like nobody/nogroup or daemon:daemon or a dedicated user for wsdd
 User=nobody
