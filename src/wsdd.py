@@ -538,6 +538,9 @@ def enumerate_host_interfaces():
     if args.interface:
         addrs = [x for x in addrs if x[0] in args.interface]
 
+    # filter non unique addresses
+    addrs = list({x[2]:x for x in addrs}.values())
+
     return addrs
 
 
