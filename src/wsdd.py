@@ -538,9 +538,6 @@ def enumerate_host_interfaces():
     if args.interface:
         addrs = [x for x in addrs if x[0] in args.interface]
 
-    # filter non unique addresses
-    addrs = list({x[2]:x for x in addrs}.values())
-
     return addrs
 
 
@@ -681,6 +678,7 @@ def serve_wsd_requests(addresses):
     """
     s = selectors.DefaultSelector()
     udp_srvs = []
+    http_listeners = []
 
     for address in addresses:
         interface = MulticastInterface(address[1], address[2], address[0])
@@ -688,7 +686,8 @@ def serve_wsd_requests(addresses):
         udp_srvs.append(udp_srv)
         s.register(interface.recv_socket, selectors.EVENT_READ, udp_srv)
 
-        if not args.nohttp:
+        if not args.nohttp and interface.listen_address not in http_listeners:
+            http_listeners.append(interface.listen_address)
             klass = (
                 http.server.HTTPServer
                 if interface.family == socket.AF_INET
