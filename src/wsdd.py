@@ -377,7 +377,7 @@ def wsd_is_duplicated_msg(msg_id):
     return False
 
 
-def wsd_handle_message(data, interface):
+def wsd_handle_message(data, interface, src_address):
     """
     handle a WSD message that might be received by a MulticastInterface class
     """
@@ -393,8 +393,18 @@ def wsd_handle_message(data, interface):
     response = None
     action = header.find('./wsa:Action', namespaces).text
     body = tree.find('./soap:Body', namespaces)
+    _, _, action_method = action.rpartition('/')
 
-    logger.info('handling WSD {0} type message ({1})'.format(action, msg_id))
+    if interface:
+        logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
+            src_address[0], src_address[1], interface.interface,
+            action_method, msg_id
+        ))
+    else:
+        # http logging is already done by according server
+        logger.debug('processing WSD {} message ({})'.format(
+            action_method, msg_id))
+
     logger.debug('incoming message content is {0}'.format(data))
     if action == WSD_PROBE:
         probe = body.find('./wsd:Probe', namespaces)
@@ -424,7 +434,7 @@ class WSDUdpRequestHandler():
 
     def handle_request(self):
         msg, address = self.interface.recv_socket.recvfrom(WSD_MAX_LEN)
-        msg = wsd_handle_message(msg, self.interface)
+        msg = wsd_handle_message(msg, self.interface, address)
         if msg:
             self.enqueue_datagram(msg, address=address)
 
@@ -489,7 +499,7 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         content_length = int(s.headers['Content-Length'])
         body = s.rfile.read(content_length)
 
-        response = wsd_handle_message(body, None)
+        response = wsd_handle_message(body, None, None)
         if response:
             s.send_response(200)
             s.send_header('Content-Type', 'application/soap+xml')
