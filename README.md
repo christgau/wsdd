@@ -71,7 +71,8 @@ allowed.
      specified, all interfaces are used. The loop-back interface is never used,
      even when it was explicitly specified. For interfaces with IPv6 addresses,
      only link-local addresses will be used for announcing the host on the
-	 network.
+     network. This option can be provided multiple times in order to use more
+     than interface (but no all).
 
  * `-H HOPLIMIT`, `--hoplimit HOPLIMIT`
 
