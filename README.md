@@ -170,6 +170,29 @@ reliably discovered. The reason appears to be that Windows is not always able
 to connect to the HTTP service for unknown reasons. As a workaround, run wsdd
 with IPv4 only.
 
+## Tunnel/Bridge Interface
+
+If tunnel/bridge interfaces like those created by OpenVPN or Docker exist, they
+may interfere with wsdd if executed without providing an interface that it
+should bind to (so it binds to all). In such cases, the wsdd hosts appears after
+wsdd has been started but it disappears when an update of the Network view in
+Windows Explorer is forced, either by refreshing the view or by a reboot of the
+Windows machine.  To solve this issue, the interface that is connected to the
+network on which the host should be announced needs to be specified with the
+`-i/--interface` option.  This prevents the usage of the tunnel/bridge
+interfaces.
+
+Background: Tunnel/bridge interfaces may cause Resolve requests from Windows
+hosts to be delivered to wsdd multiple times,´i.e. duplicates of such request
+are created. If wsdd receives such a request first from a tunnel/bridge it uses
+the transport address (IP address) of that interface and sends the response via
+unicast. Further duplicates are not processed due to the duplicate message
+detection which is based on message UUIDs. The Windows host which receives the
+response appears to detect a mismatch between the transport address in the
+ResolveMatch message (which is the tunnel/bridge address) and the IP of the
+sending host/interface (LAN IP, e.g.). Subsequently, the wsdd host is ignored by
+Windows.
+
 # Contributing
 
 Contributions are welcome. Please ensure PEP8 compliance when submitting
