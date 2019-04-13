@@ -278,7 +278,6 @@ def wsd_build_message(to_addr, action_str, request_header, response):
 
 # WSD message type handling
 def wsd_handle_probe(probe):
-    types = probe.find('./wsd:Types', namespaces).text
     scopes = probe.find('./wsd:Scopes', namespaces)
 
     if scopes:
@@ -287,6 +286,12 @@ def wsd_handle_probe(probe):
             scopes))
         return None
 
+    types_elem = probe.find('./wsd:Types', namespaces)
+    if types_elem is None:
+        logger.debug('Probe message lacks wsd:Types element. Ignored.')
+        return None
+
+    types = types_elem.text
     if not types == WSD_TYPE_DEVICE:
         logger.debug('unknown discovery type ({0}) during probe'.format(types))
         return None
