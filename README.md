@@ -119,6 +119,12 @@ allowed.
      -v/--verbose sets the log level to INFO. More -v options set the log level
      to DEBUG.
 
+ * `-s`, `--shortlog`
+
+     Use a shorter logging format that only includes the level and message.
+     This is useful in cases where the logging mechanism, like systemd on Linux,
+     automatically prepend a date and process name plus ID to the log message.
+
  * `-4`, `--ipv4only` (see below)
  * `-6`, `--ipv6only`
 
