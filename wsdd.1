@@ -1,0 +1,125 @@
+.TH wsdd 1
+.SH NAME
+wsdd \- A Web Service Discovery host daemon.
+.SH SYNOPSIS
+.B wsdd [\fBoptions\fR]
+.SH DESCRIPTION
+.PP
+.B wsdd
+implements a Web Service Discovery host daemon. This enables (Samba)
+hosts, like your local NAS device, to be found by Web Service Discovery Clients
+like Windows.
+.SH OPTIONS
+.TP
+\fB\-4\fR, \fB\-\-ipv4only\fR
+See below.
+.TP
+\fB\-6\fR, \fB\-\-ipv6only\fR
+Restrict to the given address family. If both options are specified no
+addreses will be available and wsdd will exit.
+.TP
+\fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
+Assume that the host running wsdd joined an ADS domain. This will make
+wsdd report the host being a domain member. It disables workgroup
+membership reporting.
+.TP
+\fB\-H \fIHOPLIMIT\fR, \fB\-\-hoplimit \fIHOPLIMIT\fR
+Set the hop limit for multicast packets. The default is 1 which should
+prevent packets from leaving the local network segment.
+.TP
+\fB\-i \fIINTERFACE\fR, \fB\-\-interface \fIINTERFACE\fR
+Specify on which interfaces wsdd will be listening on. If no interfaces are
+specified, all interfaces are used. The loop-back interface is never used,
+even when it was explicitly specified. For interfaces with IPv6 addresses,
+only link-local addresses will be used for announcing the host on the
+network. This option can be provided multiple times in order to use more
+than interface (but no all).
+.TP
+\fB\-n \fIHOSTNAME\fR, \fB\-\-hostname \fIHOSTNAME\fR
+Override the host name wsdd uses during discovery. By default the machine's
+host name is used (look at hostname(1)). Only the host name part of a
+possible FQDN will be used in the default case.
+.TP
+\fB\-s\fR, \fB\-\-shortlog\fR
+Use a shorter logging format that only includes the level and message.
+This is useful in cases where the logging mechanism, like systemd on Linux,
+automatically prepends a date and process name plus ID to the log message.
+.TP
+\fB\-t\fI\fR, \fI\fB\-\-nohttp\fR
+Do not service HTTP requests of the WSD protocol. This option is intended
+for debugging purposes where another process may handle the Get messages.
+.TP
+\fB\-u \fIUUID\fR, \fB\-\-uuid \fIUUID\fR
+The WSD specification requires a device to have a unique address that is
+stable across reboots or changes in networks. In the context of the
+standard, it is assumed that this is something like a serial number. wsdd
+uses the UUID version 5 with the DNS namespace and the host name of the
+local machine as inputs. Thus, the host name should be stable and not be
+modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID
+you can use this option.
+.TP
+\fB\-v\fI\fR, \fI\fB\-\-verbose\fR
+Additively increase verbosity of the log output. A single occurrence of
+-v/--verbose sets the log level to INFO. More -v options set the log level
+to DEBUG.
+.TP
+\fB\-w \fIWORKGROUP\fR, \fB\-\-workgroup \fIWORKGROUP\fR
+By default wsdd reports the host is a member of a workgroup rather than a
+domain (use the -d/--domain option to override this). With -w/--workgroup
+the default workgroup name can be changed. The default work group name is
+WORKGROUP.
+.SH EXAMPLE USAGE
+.SS Handle traffic on eth0 and eth2 only, but only with IPv6 addresses
+
+    wsdd \-i eth0 \-i eth2 \-6
+
+    or
+
+    wsdd \-\-interface eth0 \-\-interface eth2 \-\-ipv6only
+.SS Set the Workgroup according to smb.conf and be verbose
+
+    SMB_GROUP=$(grep \-i '^\s*workgroup\s*=' smb.conf | cut \-f2 \-d= | tr \-d '[:blank:]')
+
+    wsdd \-v \-w $SMB_GROUP
+.SH FIREWALL SETUP
+.PP
+Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
+IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
+multicast address (`fe02::c`) is used.
+.PP
+Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
+allowed.
+.SH SECURITY
+.PP
+wsdd does not implement any security feature, e.g. by using TLS for the http
+service. This is because wsdd's intended usage is within private, i.e. home,
+LANs. The \fIHello\fR message contains the hosts transport address, i.e. the IP
+address which speeds up discovery (avoids \fIResolve\fR message).
+.SH KNOWN ISSUES
+.SS Using only IPv6 on FreeBSD
+If wsdd is running on FreeBSD using IPv6 only, the host running wsdd may not be
+reliably discovered. The reason appears to be that Windows is not always able
+to connect to the HTTP service for unknown reasons. As a workaround, run wsdd
+with IPv4 only.
+.SS Tunnel/Bridge Interface
+.PP
+If tunnel/bridge interfaces like those created by OpenVPN or Docker exist, they
+may interfere with wsdd if executed without providing an interface that it
+should bind to (so it binds to all). In such cases, the wsdd hosts appears after
+wsdd has been started but it disappears when an update of the Network view in
+Windows Explorer is forced, either by refreshing the view or by a reboot of the
+Windows machine.  To solve this issue, the interface that is connected to the
+network on which the host should be announced needs to be specified with the
+-i/--interface option.  This prevents the usage of the tunnel/bridge
+interfaces.
+.PP
+Background: Tunnel/bridge interfaces may cause \fIResolve\fR requests from Windows
+hosts to be delivered to wsdd multiple times, i.e. duplicates of such request
+are created. If wsdd receives such a request first from a tunnel/bridge it uses
+the transport address (IP address) of that interface and sends the response via
+unicast. Further duplicates are not processed due to the duplicate message
+detection which is based on message UUIDs. The Windows host which receives the
+response appears to detect a mismatch between the transport address in the
+\fIResolveMatch\fR message (which is the tunnel/bridge address) and the IP of the
+sending host/interface (LAN IP, e.g.). Subsequently, the wsdd host is ignored by
+Windows.
