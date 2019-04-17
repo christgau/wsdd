@@ -16,7 +16,14 @@ start() {
 	ebegin "Starting ${RC_SVCNAME} daemon"
 
 	OPTS=""
-	if [ -r "${SMB_CONFIG_FILE}" ]; then
+
+	# try to extract workgroup with Samba's testparm
+	if which testparm >/dev/null 2>/dev/null; then
+		GROUP="$(testparm -s --parameter-name workgroup 2>/dev/null)"
+	fi
+
+	# fallback to poor man's approach if testparm is unavailable or failed for some reason
+	if [ -z "$GROUP" && -r "${SMB_CONFIG_FILE}" ]; then
 		GROUP=`grep -i '^\s*workgroup\s*=' ${SMB_CONFIG_FILE} | cut -f2 -d= | tr -d '[:blank:]'`
 		if [ "${GROUP}x" != "x" ]; then
 			OPTS="-w ${GROUP} ${OPTS}"

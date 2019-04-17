@@ -9,10 +9,19 @@
 
 name=wsdd
 rcvar=wsdd_enable
+wsdd_group=""
 
+if which testparm >/dev/null 2>/dev/null; then
+	wsdd_group=$(testparm -s --parameter-name workgroup 2>/dev/null)
+fi
+
+# try to manually extract workgroup from samba configuration if testparm failed
 wsdd_smb_config_file="/usr/local/etc/smb.conf"
-if [ -r $wsdd_smb_config_file ]; then
+if [ -z "$wsdd_group" ] && [ -r $wsdd_smb_config_file ]; then
 	wsdd_group="$(grep -i '^[[:space:]]*workgroup[[:space:]]*=' $wsdd_smb_config_file | cut -f2 -d= | tr -d '[:blank:]')"
+fi
+
+if [ -n "$wsdd_group" ]; then
 	wsdd_opts="-w ${wsdd_group}"
 fi
 
