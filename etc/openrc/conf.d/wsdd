@@ -1,0 +1,15 @@
+# /etc/conf.d/wsdd
+
+# Override the default user/group under which wsdd runs.
+# Must follow the user[:group] notation.
+#WSDD_USER="daemon:deamon"
+
+# Specify alternative log file location.
+#WSDD_LOG_FILE="/var/log/wsdd.log"
+
+# Disable automatic detection of the workgroup from samba configuration.
+#WSDD_WORKGROUP="MYGROUP"
+
+# Additional options for the daemon, e.g. to listen on interface eth0 only.
+# Refer to wsdd(1) for details.
+#WSDD_OPTS="-i eth0"

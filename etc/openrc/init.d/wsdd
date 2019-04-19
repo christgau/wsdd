@@ -8,26 +8,31 @@ depend() {
 }
 
 SMB_CONFIG_FILE="/etc/samba/smb.conf"
-LOG_FILE="/var/log/wsdd.log"
+LOG_FILE="${WSDD_LOG_FILE:-/var/log/wsdd.log}"
 WSDD_EXEC="/usr/bin/wsdd"
-RUN_AS_USER="daemon:daemon"
+RUN_AS_USER="${WSDD_USER:-daemon:daemon}"
 
 start() {
 	ebegin "Starting ${RC_SVCNAME} daemon"
 
-	OPTS=""
+	OPTS="${WSDD_OPTS}"
 
-	# try to extract workgroup with Samba's testparm
-	if which testparm >/dev/null 2>/dev/null; then
-		GROUP="$(testparm -s --parameter-name workgroup 2>/dev/null)"
-	fi
+	if [ -z "$WSDD_WORKGROUP" ]; then
+		# try to extract workgroup with Samba's testparm
+		if which testparm >/dev/null 2>/dev/null; then
+			GROUP="$(testparm -s --parameter-name workgroup 2>/dev/null)"
+		fi
 
-	# fallback to poor man's approach if testparm is unavailable or failed for some reason
-	if [ -z "$GROUP" && -r "${SMB_CONFIG_FILE}" ]; then
-		GROUP=`grep -i '^\s*workgroup\s*=' ${SMB_CONFIG_FILE} | cut -f2 -d= | tr -d '[:blank:]'`
-		if [ "${GROUP}x" != "x" ]; then
+		# fallback to poor man's approach if testparm is unavailable or failed for some reason
+		if [ -z "$GROUP" ] && [ -r "${SMB_CONFIG_FILE}" ]; then
+			GROUP=`grep -i '^\s*workgroup\s*=' ${SMB_CONFIG_FILE} | cut -f2 -d= | tr -d '[:blank:]'`
+		fi
+
+		if [ -n "${GROUP}" ]; then
 			OPTS="-w ${GROUP} ${OPTS}"
 		fi
+	else
+		OPTS="-w ${WSDD_WORKGROUP} ${OPTS}"
 	fi
 
 	if [ ! -r "${LOG_FILE}" ]; then
