@@ -746,7 +746,8 @@ def main():
     signal.signal(signal.SIGTERM, sigterm_handler)
     serve_wsd_requests(addresses)
     logger.info('Done.')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
