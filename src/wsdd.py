@@ -355,7 +355,7 @@ def wsd_handle_get():
     if args.domain:
         ElementTree.SubElement(host, PUB_COMPUTER).text = (
                 '{0}/Domain:{1}'.format(
-                    args.hostname.upper(),
+                    args.hostname,
                     args.domain))
     else:
         ElementTree.SubElement(host, PUB_COMPUTER).text = (
