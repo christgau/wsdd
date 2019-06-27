@@ -93,7 +93,8 @@ allowed.
 
      Assume that the host running wsdd joined an ADS domain. This will make
      wsdd report the host being a domain member. It disables workgroup
-     membership reporting.
+     membership reporting. The (provided) hostname is automatically converted
+     to lower case. Use the `-p` option to change this behavior.
 
  * `-n HOSTNAME`, `--hostname HOSTNAME`
 
@@ -103,10 +104,11 @@ allowed.
 
  * `-w WORKGROUP`, `--workgroup WORKGROUP`
 
-	 By default wsdd reports the host is a member of a workgroup rather than a
-	 domain (use the -d/--domain option to override this). With -w/--workgroup
-	 the default workgroup name can be changed. The default work group name is
-	 WORKGROUP.
+     By default wsdd reports the host is a member of a workgroup rather than a
+     domain (use the -d/--domain option to override this). With -w/--workgroup
+     the default workgroup name can be changed. The default work group name is
+     WORKGROUP. The (provided) hostname is automatically converted to upper
+     case. Use the `-p` option to change this behavior.
 
  * `-t`, `--nohttp`
 
@@ -125,11 +127,18 @@ allowed.
      This is useful in cases where the logging mechanism, like systemd on Linux,
      automatically prepend a date and process name plus ID to the log message.
 
+ * `-p`, `--preserve-case`
+
+     Preserve the hostname as it is. Without this option, the hostname is
+     converted as follows. For workgroup environments (see `-w`) the hostname
+     is made upper case by default. Vice versa it is made lower case for usage
+     in domains (see `-d`).
+
  * `-4`, `--ipv4only` (see below)
  * `-6`, `--ipv6only`
 
-	 Restrict to the given address family. If both options are specified no
-	 addreses will be available and wsdd will exit.
+     Restrict to the given address family. If both options are specified no
+     addreses will be available and wsdd will exit.
 
 ## Example Usage
 
@@ -175,6 +184,16 @@ If wsdd is running on FreeBSD using IPv6 only, the host running wsdd may not be
 reliably discovered. The reason appears to be that Windows is not always able
 to connect to the HTTP service for unknown reasons. As a workaround, run wsdd
 with IPv4 only.
+
+## Usage with NATs
+
+Do not use wssd on interfaces that are affected by NAT. According to the
+standard, the _ResolveMatch_ messages emitted by wsdd, contain the IP address
+("transport address" in standard parlance) of the interface(s) the application
+has been bound to into. When such messages are retrieved by a client (Windows
+hosts, e.g.) they are unlikely to be able to connect to the provided address
+which has been subject to NAT. To avoid this issue, use the `-i/--interface`
+option to bind wsdd to interfaces not affected by NAT.
 
 ## Tunnel/Bridge Interface
 

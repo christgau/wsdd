@@ -21,7 +21,8 @@ addreses will be available and wsdd will exit.
 \fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
 Assume that the host running wsdd joined an ADS domain. This will make
 wsdd report the host being a domain member. It disables workgroup
-membership reporting.
+membership reporting. The (provided) hostname is automatically converted
+to lower case. Use the `-p` option to change this behavior.
 .TP
 \fB\-H \fIHOPLIMIT\fR, \fB\-\-hoplimit \fIHOPLIMIT\fR
 Set the hop limit for multicast packets. The default is 1 which should
@@ -39,6 +40,12 @@ than interface (but no all).
 Override the host name wsdd uses during discovery. By default the machine's
 host name is used (look at hostname(1)). Only the host name part of a
 possible FQDN will be used in the default case.
+.TP
+\fB\-p\fR, \fB\-\-preserve-case\fR
+Preserve the hostname as it is. Without this option, the hostname is
+converted as follows. For workgroup environments (see -w) the hostname
+is made upper case by default. Vice versa it is made lower case for usage
+in domains (see -d).
 .TP
 \fB\-s\fR, \fB\-\-shortlog\fR
 Use a shorter logging format that only includes the level and message.
@@ -67,7 +74,8 @@ to DEBUG.
 By default wsdd reports the host is a member of a workgroup rather than a
 domain (use the -d/--domain option to override this). With -w/--workgroup
 the default workgroup name can be changed. The default work group name is
-WORKGROUP.
+WORKGROUP. The (provided) hostname is automatically converted to upper
+case. Use the `-p` option to change this behavior.
 .SH EXAMPLE USAGE
 .SS Handle traffic on eth0 and eth2 only, but only with IPv6 addresses
 

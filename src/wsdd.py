@@ -354,14 +354,14 @@ def wsd_handle_get():
     ElementTree.SubElement(host, 'wsdp:ServiceId').text = args.uuid.urn
     if args.domain:
         ElementTree.SubElement(host, PUB_COMPUTER).text = (
-                '{0}/Domain:{1}'.format(
-                    args.hostname.upper(),
-                    args.domain))
+            '{0}/Domain:{1}'.format(
+                args.hostname if args.preserve_case else args.hostname.lower(),
+                args.domain))
     else:
         ElementTree.SubElement(host, PUB_COMPUTER).text = (
-                '{0}/Workgroup:{1}'.format(
-                    args.hostname.upper(),
-                    args.workgroup.upper()))
+            '{0}/Workgroup:{1}'.format(
+                args.hostname if args.preserve_case else args.hostname.upper(),
+                args.workgroup.upper()))
 
     return metadata
 
@@ -612,6 +612,10 @@ def parse_args():
     parser.add_argument(
         '-s', '--shortlog',
         help='log only level and message',
+        action='store_true')
+    parser.add_argument(
+        '-p', '--preserve-case'
+        help='preserve case of the provided/detected hostname',
         action='store_true')
 
     args = parser.parse_args(sys.argv[1:])
