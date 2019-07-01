@@ -614,7 +614,7 @@ def parse_args():
         help='log only level and message',
         action='store_true')
     parser.add_argument(
-        '-p', '--preserve-case'
+        '-p', '--preserve-case',
         help='preserve case of the provided/detected hostname',
         action='store_true')
 
