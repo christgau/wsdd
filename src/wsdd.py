@@ -26,6 +26,7 @@ import ctypes.util
 import collections
 import xml.etree.ElementTree as ElementTree
 import http.server
+import os
 
 
 # sockaddr C type, with a larger data field to capture IPv6 addresses
@@ -581,6 +582,10 @@ def parse_args():
         help='UUID for the target device',
         default=None)
     parser.add_argument(
+        '-c', '--chroot',
+        help='Directory to chroot into',
+        default=None)
+    parser.add_argument(
         '-v', '--verbose',
         help='increase verbosity',
         action='count', default=0)
@@ -738,6 +743,22 @@ def serve_wsd_requests(addresses):
 
     send_outstanding_messages(True)
 
+def self_chroot():
+    """
+    Chroot into a separate directory to prevent access to /etc, /var, /home
+    and other places with possibly sensitive information.
+    This will prevent data leaks if there is a vulnarability that will allow
+    arbitrary code execution in wsdd.
+    """
+    chroot_directory = args.chroot
+    if chroot_directory is not None:
+        try:
+            os.chdir(chroot_directory)
+            os.chroot(chroot_directory)
+            logger.info('Chrooted successfully')
+        except Exception as exc:
+            logger.exception('Error chrooting')
+            raise error 
 
 def main():
     parse_args()
@@ -748,6 +769,7 @@ def main():
         return 1
 
     signal.signal(signal.SIGTERM, sigterm_handler)
+    self_chroot()
     serve_wsd_requests(addresses)
     logger.info('Done.')
     return 0
