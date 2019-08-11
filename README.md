@@ -115,6 +115,21 @@ allowed.
      Do not service http requests of the WSD protocol. This option is intended
      for debugging purposes where another process may handle the Get messages.
 
+ * `-c`, `--chroot`
+
+     Chroot into a separate directory to prevent access to /etc, /var, /home
+     and other places with possibly sensitive information.
+     This will prevent data leaks if there is a vulnarability that will allow
+     arbitrary code execution in wsdd.
+     Note that needed Python modules and required libraries must be available
+     inside the chroot (read-only mode is enough).
+     For example, if `/var/lib/wsdd` is an empty directory for chrooting into,
+     then `mount --bind -o ro /usr /var/lib/wsdd/usr` (or use `nullfs` on BSD OSes)
+     before starting wsdd.  
+     Example systemd services are in `etc/systemd/chrooted/`.  
+     You may refer to [ROSA wsdd package](https://abf.io/import/wsdd) as an example
+     of how wsdd is chrooted and run from a separate unprevileged user out of the box.
+
  * `-v`, `--verbose`
 
      Additively increase verbosity of the log output. A single occurrence of
