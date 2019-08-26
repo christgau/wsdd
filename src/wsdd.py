@@ -582,10 +582,6 @@ def parse_args():
         help='UUID for the target device',
         default=None)
     parser.add_argument(
-        '-c', '--chroot',
-        help='Directory to chroot into',
-        default=None)
-    parser.add_argument(
         '-v', '--verbose',
         help='increase verbosity',
         action='count', default=0)
@@ -622,6 +618,10 @@ def parse_args():
         '-p', '--preserve-case',
         help='preserve case of the provided/detected hostname',
         action='store_true')
+    parser.add_argument(
+        '-c', '--chroot',
+        help='directory to chroot into',
+        default=None)
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -694,6 +694,21 @@ def send_outstanding_messages(block=False):
     return None
 
 
+def chroot(root):
+    """
+    Chroot into a separate directory to isolate ourself for increased security.
+    """
+    try:
+        os.chroot(root)
+        os.chdir('/')
+        logger.info('chrooted successfully to {}'.format(root))
+    except Exception as e:
+        logger.error('error chrooting to {}: {}'.format(root, e))
+        return False
+
+    return True;
+
+
 def serve_wsd_requests(addresses):
     """
     Multicast handling: send Hello message on startup, receive from multicast
@@ -716,6 +731,10 @@ def serve_wsd_requests(addresses):
                 else HTTPv6Server)
             http_srv = klass(interface.listen_address, WSDHttpRequestHandler)
             s.register(http_srv.fileno(), selectors.EVENT_READ, http_srv)
+
+    if args.chroot is not None:
+        if not chroot(args.chroot):
+            return 2
 
     # everything is set up, announce ourself and serve requests
     try:
@@ -742,23 +761,8 @@ def serve_wsd_requests(addresses):
         srv.send_bye()
 
     send_outstanding_messages(True)
+    return 0
 
-def self_chroot():
-    """
-    Chroot into a separate directory to prevent access to /etc, /var, /home
-    and other places with possibly sensitive information.
-    This will prevent data leaks if there is a vulnarability that will allow
-    arbitrary code execution in wsdd.
-    """
-    chroot_directory = args.chroot
-    if chroot_directory is not None:
-        try:
-            os.chdir(chroot_directory)
-            os.chroot(chroot_directory)
-            logger.info('Chrooted successfully')
-        except Exception as exc:
-            logger.exception('Error chrooting')
-            raise error 
 
 def main():
     parse_args()
@@ -769,10 +773,9 @@ def main():
         return 1
 
     signal.signal(signal.SIGTERM, sigterm_handler)
-    self_chroot()
-    serve_wsd_requests(addresses)
-    logger.info('Done.')
-    return 0
+    retval = serve_wsd_requests(addresses)
+    if retval == 0: logger.info('Done.')
+    return retval;
 
 
 if __name__ == '__main__':

@@ -18,6 +18,11 @@ See below.
 Restrict to the given address family. If both options are specified no
 addreses will be available and wsdd will exit.
 .TP
+\fB\-c \fIDIRECTORY\fR, \fB\-\-chroot \fIDIRECTORY\fR
+chroot into the given \fIDIRECTORY\fR after initialization has been performed
+and right before the handling of incoming messages starts. The new root directory
+can be empty.
+.TP
 \fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
 Assume that the host running wsdd joined an ADS domain. This will make
 wsdd report the host being a domain member. It disables workgroup
