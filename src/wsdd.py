@@ -26,7 +26,7 @@ import ctypes.util
 import collections
 import xml.etree.ElementTree as ElementTree
 import http.server
-import os
+import os, pwd, grp
 
 
 # sockaddr C type, with a larger data field to capture IPv6 addresses
@@ -578,7 +578,7 @@ def parse_args():
         help='hop limit for multicast packets (default = 1)', type=int,
         default=1)
     parser.add_argument(
-        '-u', '--uuid',
+        '-U', '--uuid',
         help='UUID for the target device',
         default=None)
     parser.add_argument(
@@ -621,6 +621,10 @@ def parse_args():
     parser.add_argument(
         '-c', '--chroot',
         help='directory to chroot into',
+        default=None)
+    parser.add_argument(
+        '-u', '--user',
+        help='drop privileges to user:group',
         default=None)
 
     args = parser.parse_args(sys.argv[1:])
@@ -703,7 +707,45 @@ def chroot(root):
         os.chdir('/')
         logger.info('chrooted successfully to {}'.format(root))
     except Exception as e:
-        logger.error('error chrooting to {}: {}'.format(root, e))
+        logger.error('could not chroot to {}: {}'.format(root, e))
+        return False
+
+    return True;
+
+
+def get_ids_from_userspec(user_spec):
+    uid = None
+    gid = None
+    try:
+        user, _, group = user_spec.partition(':')
+
+        if user:
+            uid = pwd.getpwnam(user).pw_uid
+
+        if group:
+            gid = grp.getgrnam(group).gr_gid
+    except Exception as e:
+        logger.error('could not get uid/gid for {}: {}'.format(user_spec,e))
+        return False
+
+    return (uid, gid)
+
+
+def drop_privileges(uid, gid):
+    try:
+        if gid is not None:
+            os.setgid(gid)
+            os.setegid(gid)
+            logger.debug('switched uid to {}'.format(uid))
+
+        if uid is not None:
+            os.setuid(uid)
+            os.seteuid(uid)
+            logger.debug('switched gid to {}'.format(gid))
+
+        logger.info('running as {} ({}:{})'.format(args.user, uid, gid))
+    except Exception as e:
+        logger.error('dropping privileges failed: {}'.format(e))
         return False
 
     return True;
@@ -732,9 +774,22 @@ def serve_wsd_requests(addresses):
             http_srv = klass(interface.listen_address, WSDHttpRequestHandler)
             s.register(http_srv.fileno(), selectors.EVENT_READ, http_srv)
 
+    # get uid:gid before potential chroot'ing
+    if args.user is not None:
+        ids = get_ids_from_userspec(args.user)
+        if not ids:
+            return 3
+
     if args.chroot is not None:
         if not chroot(args.chroot):
             return 2
+
+    if args.user is not None:
+        if not drop_privileges(ids[0], ids[1]):
+            return 3
+
+    if args.chroot and (os.getuid() == 0 or os.getgid() == 0):
+        logger.warn('chrooted but running as root, consider -u option')
 
     # everything is set up, announce ourself and serve requests
     try:

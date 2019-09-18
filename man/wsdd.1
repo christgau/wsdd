@@ -21,7 +21,7 @@ addreses will be available and wsdd will exit.
 \fB\-c \fIDIRECTORY\fR, \fB\-\-chroot \fIDIRECTORY\fR
 chroot into the given \fIDIRECTORY\fR after initialization has been performed
 and right before the handling of incoming messages starts. The new root directory
-can be empty.
+can be empty. Consider using the \fB-u\fR option as well.
 .TP
 \fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
 Assume that the host running wsdd joined an ADS domain. This will make
@@ -61,7 +61,13 @@ automatically prepends a date and process name plus ID to the log message.
 Do not service HTTP requests of the WSD protocol. This option is intended
 for debugging purposes where another process may handle the Get messages.
 .TP
-\fB\-u \fIUUID\fR, \fB\-\-uuid \fIUUID\fR
+\fB\-u \fIUSER[:GROUP]\fR, \fB\-\-user \fIUSER[:GROUP]\fR
+Change user (and group) when running before handling network packets.
+Together with \fB\-c\fR this option can be used to increase security
+if the execution environment, like the init system, cannot ensure this in
+another way.
+.TP
+\fB\-U \fIUUID\fR, \fB\-\-uuid \fIUUID\fR
 The WSD specification requires a device to have a unique address that is
 stable across reboots or changes in networks. In the context of the
 standard, it is assumed that this is something like a serial number. wsdd
@@ -89,11 +95,11 @@ case. Use the `-p` option to change this behavior.
     or
 
     wsdd \-\-interface eth0 \-\-interface eth2 \-\-ipv6only
-.SS Set the Workgroup according to smb.conf and be verbose
+.SS Set the Workgroup according to smb.conf, be verbose, run with dropped privileges, and change the root directory to an (empty) directory
 
     SMB_GROUP=$(grep \-i '^\s*workgroup\s*=' smb.conf | cut \-f2 \-d= | tr \-d '[:blank:]')
 
-    wsdd \-v \-w $SMB_GROUP
+    wsdd \-v \-w $SMB_GROUP -u daemon:daemon -c /var/run/wsdd/chroot
 .SH FIREWALL SETUP
 .PP
 Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
