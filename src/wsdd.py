@@ -26,7 +26,9 @@ import ctypes.util
 import collections
 import xml.etree.ElementTree as ElementTree
 import http.server
-import os, pwd, grp
+import os
+import pwd
+import grp
 
 
 # sockaddr C type, with a larger data field to capture IPv6 addresses
@@ -710,7 +712,7 @@ def chroot(root):
         logger.error('could not chroot to {}: {}'.format(root, e))
         return False
 
-    return True;
+    return True
 
 
 def get_ids_from_userspec(user_spec):
@@ -725,7 +727,7 @@ def get_ids_from_userspec(user_spec):
         if group:
             gid = grp.getgrnam(group).gr_gid
     except Exception as e:
-        logger.error('could not get uid/gid for {}: {}'.format(user_spec,e))
+        logger.error('could not get uid/gid for {}: {}'.format(user_spec, e))
         return False
 
     return (uid, gid)
@@ -748,7 +750,7 @@ def drop_privileges(uid, gid):
         logger.error('dropping privileges failed: {}'.format(e))
         return False
 
-    return True;
+    return True
 
 
 def serve_wsd_requests(addresses):
@@ -829,8 +831,9 @@ def main():
 
     signal.signal(signal.SIGTERM, sigterm_handler)
     retval = serve_wsd_requests(addresses)
-    if retval == 0: logger.info('Done.')
-    return retval;
+    if retval == 0:
+        logger.info('Done.')
+    return retval
 
 
 if __name__ == '__main__':
