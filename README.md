@@ -79,7 +79,7 @@ allowed.
      Set the hop limit for multicast packets. The default is 1 which should
      prevent packets from leaving the local network segment.
 
- * `-u UUID`, `--uuid UUID`
+ * `-U UUID`, `--uuid UUID`
 
      The WSD specification requires a device to have a unique address that is
      stable across reboots or changes in networks. In the context of the
@@ -114,6 +114,20 @@ allowed.
 
      Do not service http requests of the WSD protocol. This option is intended
      for debugging purposes where another process may handle the Get messages.
+
+ * `-c DIRECTORY`, `--chroot DIRECTORY`
+
+     Chroot into a separate directory to prevent access to other directories of
+     the system. This increases security in case of a vulnerability in wsdd.
+     Consider setting the user and group under which wssd is running by using
+     the `-u` option.
+
+ * `-u USER[:GROUP]`, `--user USER[:GROUP]`
+
+     Change user (and group) when running before handling network packets.
+     Together with `-c` this option can be used to increase security if the
+     execution environment, like the init system, cannot ensure this in
+     another way.
 
  * `-v`, `--verbose`
 
@@ -177,6 +191,9 @@ wsdd does not implement any security feature, e.g. by using TLS for the http
 service. This is because wsdd's intended usage is within private, i.e. home,
 LANs. The _Hello_ message contains the hosts transport address, i.e. the IP
 address which speeds up discovery (avoids _Resolve_ message).
+
+In order to increase the security, use the capabilities of the init system or
+consider the `-u` and `-c` options.
 
 ## Using only IPv6 on FreeBSD
 
