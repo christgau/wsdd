@@ -4,12 +4,17 @@ wsdd implements a Web Service Discovery host daemon. This enables (Samba)
 hosts, like your local NAS device, to be found by Web Service Discovery Clients
 like Windows.
 
+It also implements the client side of the discovery protocol which allows to
+search for Windows machines and other devices implementing WSD. This mode of
+operation is called discovery mode.
+
 # Purpose
 
 Since NetBIOS discovery is not supported by Windows anymore, wsdd makes hosts
 to appear in Windows again using the Web Service Discovery method. This is
 beneficial for devices running Samba, like NAS or file sharing servers on your
-local network.
+local network. The discovery mode searches for other WSD servers in the local
+subnet.
 
 ## Background
 
@@ -65,6 +70,33 @@ allowed.
 
 ## Options
 
+By default wsdd runs in host mode and binds to all interfaces with only
+warnings and error messages enabled. In this configuration the host running
+wsdd is discovered with its configured hostname and belong to a default
+workgroup. The dicovery mode, which allows to search for other WSD-compatible
+devices must be enabled explicitely. Both modes can be used simultanously. See
+below for details.
+
+### General options
+
+ * `-4`, `--ipv4only` (see below)
+ * `-6`, `--ipv6only`
+
+     Restrict to the given address family. If both options are specified no
+     addreses will be available and wsdd will exit.
+
+ * `-c DIRECTORY`, `--chroot DIRECTORY`
+
+     Chroot into a separate directory to prevent access to other directories of
+     the system. This increases security in case of a vulnerability in wsdd.
+     Consider setting the user and group under which wssd is running by using
+     the `-u` option.
+
+ * `-H HOPLIMIT`, `--hoplimit HOPLIMIT`
+
+     Set the hop limit for multicast packets. The default is 1 which should
+     prevent packets from leaving the local network segment.
+
  * `-i INTERFACE`, `--interface INTERFACE`
 
      Specify on which interfaces wsdd will be listening on. If no interfaces are
@@ -74,10 +106,18 @@ allowed.
      network. This option can be provided multiple times in order to use more
      than interface (but no all).
 
- * `-H HOPLIMIT`, `--hoplimit HOPLIMIT`
+ * `-s`, `--shortlog`
 
-     Set the hop limit for multicast packets. The default is 1 which should
-     prevent packets from leaving the local network segment.
+     Use a shorter logging format that only includes the level and message.
+     This is useful in cases where the logging mechanism, like systemd on Linux,
+     automatically prepend a date and process name plus ID to the log message.
+
+ * `-u USER[:GROUP]`, `--user USER[:GROUP]`
+
+     Change user (and group) when running before handling network packets.
+     Together with `-c` this option can be used to increase security if the
+     execution environment, like the init system, cannot ensure this in
+     another way.
 
  * `-U UUID`, `--uuid UUID`
 
@@ -88,6 +128,16 @@ allowed.
      local machine as inputs. Thus, the host name should be stable and not be
      modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID
      you can use this option.
+
+ * `-v`, `--verbose`
+
+     Additively increase verbosity of the log output. A single occurrence of
+     -v/--verbose sets the log level to INFO. More -v options set the log level
+     to DEBUG.
+
+### Host Operation Mode
+
+In host mode, the device running wsdd can be discovered by Windows.
 
  * `-d DOMAIN`, `--domain DOMAIN`
 
@@ -102,44 +152,10 @@ allowed.
      host name is used (look at hostname(1)). Only the host name part of a
      possible FQDN will be used in the default case.
 
- * `-w WORKGROUP`, `--workgroup WORKGROUP`
+ * `-o`, `--no-server`
 
-     By default wsdd reports the host is a member of a workgroup rather than a
-     domain (use the -d/--domain option to override this). With -w/--workgroup
-     the default workgroup name can be changed. The default work group name is
-     WORKGROUP. The (provided) hostname is automatically converted to upper
-     case. Use the `-p` option to change this behavior.
-
- * `-t`, `--nohttp`
-
-     Do not service http requests of the WSD protocol. This option is intended
-     for debugging purposes where another process may handle the Get messages.
-
- * `-c DIRECTORY`, `--chroot DIRECTORY`
-
-     Chroot into a separate directory to prevent access to other directories of
-     the system. This increases security in case of a vulnerability in wsdd.
-     Consider setting the user and group under which wssd is running by using
-     the `-u` option.
-
- * `-u USER[:GROUP]`, `--user USER[:GROUP]`
-
-     Change user (and group) when running before handling network packets.
-     Together with `-c` this option can be used to increase security if the
-     execution environment, like the init system, cannot ensure this in
-     another way.
-
- * `-v`, `--verbose`
-
-     Additively increase verbosity of the log output. A single occurrence of
-     -v/--verbose sets the log level to INFO. More -v options set the log level
-     to DEBUG.
-
- * `-s`, `--shortlog`
-
-     Use a shorter logging format that only includes the level and message.
-     This is useful in cases where the logging mechanism, like systemd on Linux,
-     automatically prepend a date and process name plus ID to the log message.
+     Disable host operation mode which is enabled by default. The host will
+	 not be discovered by WSD clients when this flag is provided.
 
  * `-p`, `--preserve-case`
 
@@ -148,11 +164,32 @@ allowed.
      is made upper case by default. Vice versa it is made lower case for usage
      in domains (see `-d`).
 
- * `-4`, `--ipv4only` (see below)
- * `-6`, `--ipv6only`
+ * `-t`, `--nohttp`
 
-     Restrict to the given address family. If both options are specified no
-     addreses will be available and wsdd will exit.
+     Do not service http requests of the WSD protocol. This option is intended
+     for debugging purposes where another process may handle the Get messages.
+
+ * `-w WORKGROUP`, `--workgroup WORKGROUP`
+
+     By default wsdd reports the host is a member of a workgroup rather than a
+     domain (use the -d/--domain option to override this). With -w/--workgroup
+     the default workgroup name can be changed. The default work group name is
+     WORKGROUP. The (provided) hostname is automatically converted to upper
+     case. Use the `-p` option to change this behavior.
+
+### Client / Discovery Operation Mode
+
+This mode allows to search for other WSD-compatible devices.
+
+ * `-D`, `--discovery`
+
+	 Enable discovery mode to search for other WSD hosts/servers. Found servers
+	 are printed to stdout with INFO priority. The server interface (see `-l`
+	 option) can be used for a programatic interface. Refer to the man page for
+	 details of the API.
+
+ * `-l PATH/PORT`, `--listen PATH/PORT`
+
 
 ## Example Usage
 
