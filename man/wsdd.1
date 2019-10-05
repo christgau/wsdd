@@ -1,15 +1,21 @@
 .TH wsdd 1
 .SH NAME
-wsdd \- A Web Service Discovery host daemon.
+wsdd \- A Web Service Discovery host and client daemon.
 .SH SYNOPSIS
 .B wsdd [\fBoptions\fR]
 .SH DESCRIPTION
 .PP
 .B wsdd
-implements a Web Service Discovery host daemon. This enables (Samba)
-hosts, like your local NAS device, to be found by Web Service Discovery Clients
-like Windows.
+implements both a Web Service Discovery (WSD) host and a WSD client daemon. The
+host implementation enables (Samba) hosts, like your local NAS device, to be
+found by Web Service Discovery clients like Windows. The client mode allows
+searching for other WSD hosts on the local network.
+.PP
+The default mode of operation is the host mode. The client or discovery mode
+must be enabled explictely. Unless configured otherwise, the host mode is always
+active. Both modes can be used at the same time.
 .SH OPTIONS
+.SS General options
 .TP
 \fB\-4\fR, \fB\-\-ipv4only\fR
 See below.
@@ -23,11 +29,8 @@ chroot into the given \fIDIRECTORY\fR after initialization has been performed
 and right before the handling of incoming messages starts. The new root directory
 can be empty. Consider using the \fB-u\fR option as well.
 .TP
-\fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
-Assume that the host running wsdd joined an ADS domain. This will make
-wsdd report the host being a domain member. It disables workgroup
-membership reporting. The (provided) hostname is automatically converted
-to lower case. Use the `-p` option to change this behavior.
+\fB\-h\fR, \fB\-\-help\fR
+Show help and exit.
 .TP
 \fB\-H \fIHOPLIMIT\fR, \fB\-\-hoplimit \fIHOPLIMIT\fR
 Set the hop limit for multicast packets. The default is 1 which should
@@ -35,31 +38,16 @@ prevent packets from leaving the local network segment.
 .TP
 \fB\-i \fIINTERFACE\fR, \fB\-\-interface \fIINTERFACE\fR
 Specify on which interfaces wsdd will be listening on. If no interfaces are
-specified, all interfaces are used. The loop-back interface is never used,
-even when it was explicitly specified. For interfaces with IPv6 addresses,
+specified, all interfaces are used. Loop-back interfaces are never used,
+even when explicitly specified. For interfaces with IPv6 addresses,
 only link-local addresses will be used for announcing the host on the
-network. This option can be provided multiple times in order to use more
-than interface (but no all).
-.TP
-\fB\-n \fIHOSTNAME\fR, \fB\-\-hostname \fIHOSTNAME\fR
-Override the host name wsdd uses during discovery. By default the machine's
-host name is used (look at hostname(1)). Only the host name part of a
-possible FQDN will be used in the default case.
-.TP
-\fB\-p\fR, \fB\-\-preserve-case\fR
-Preserve the hostname as it is. Without this option, the hostname is
-converted as follows. For workgroup environments (see -w) the hostname
-is made upper case by default. Vice versa it is made lower case for usage
-in domains (see -d).
+network. This option can be provided multiple times in order to restrict
+traffic to more than one interface.
 .TP
 \fB\-s\fR, \fB\-\-shortlog\fR
 Use a shorter logging format that only includes the level and message.
 This is useful in cases where the logging mechanism, like systemd on Linux,
 automatically prepends a date and process name plus ID to the log message.
-.TP
-\fB\-t\fI\fR, \fI\fB\-\-nohttp\fR
-Do not service HTTP requests of the WSD protocol. This option is intended
-for debugging purposes where another process may handle the Get messages.
 .TP
 \fB\-u \fIUSER[:GROUP]\fR, \fB\-\-user \fIUSER[:GROUP]\fR
 Change user (and group) when running before handling network packets.
@@ -76,10 +64,37 @@ local machine as inputs. Thus, the host name should be stable and not be
 modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID
 you can use this option.
 .TP
-\fB\-v\fI\fR, \fI\fB\-\-verbose\fR
+\fB\-v\fR, \fB\-\-verbose\fR
 Additively increase verbosity of the log output. A single occurrence of
 -v/--verbose sets the log level to INFO. More -v options set the log level
 to DEBUG.
+.SS Host Mode Options
+.TP
+\fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
+Assume that the host running wsdd joined an ADS domain. This will make
+wsdd report the host being a domain member. It disables workgroup
+membership reporting. The (provided) hostname is automatically converted
+to lower case. Use the `-p` option to change this behavior.
+.TP
+\fB\-n \fIHOSTNAME\fR, \fB\-\-hostname \fIHOSTNAME\fR
+Override the host name wsdd uses during discovery. By default the machine's
+host name is used (look at hostname(1)). Only the host name part of a
+possible FQDN will be used in the default case.
+.TP
+\fB\-o\fR, \fB\-\-no-host\fR
+Disable host operation mode. If this option is provided, the host cannot be
+discovered by other (Windows) hosts. It can be useful when client/discovery
+mode is used and no announcement of the host that runs wsdd should be made.
+.TP
+\fB\-p\fR, \fB\-\-preserve-case\fR
+Preserve the hostname as it is. Without this option, the hostname is
+converted as follows. For workgroup environments (see -w) the hostname
+is made upper case by default. Vice versa it is made lower case for usage
+in domains (see -d).
+.TP
+\fB\-t\fR, \fB\-\-no-http\fR
+Do not service HTTP requests of the WSD protocol. This option is intended
+for debugging purposes where another process may handle the Get messages.
 .TP
 \fB\-w \fIWORKGROUP\fR, \fB\-\-workgroup \fIWORKGROUP\fR
 By default wsdd reports the host is a member of a workgroup rather than a
@@ -87,6 +102,21 @@ domain (use the -d/--domain option to override this). With -w/--workgroup
 the default workgroup name can be changed. The default work group name is
 WORKGROUP. The (provided) hostname is automatically converted to upper
 case. Use the `-p` option to change this behavior.
+.SS Client/Discovery Mode Options
+.TP
+\fB\-D\fR, \fB\-\-discovery\fR
+Enable discovery mode to search for other WSD hosts/servers. Found hosts
+are logged with INFO priority. The server interface (see below)
+can be used for a programatic interface. Refer to the man page for
+details of the server interface.
+.TP
+\fB\-l \fIPATH/PORT\fR, \fB\-\-listen \fIPATH/PORT\fR
+Specify the location of the socket for the server programming interface.
+If the option value is numeric, it is interpreted as numeric port for a
+TCP server port. Then, the server socket is bound to the localhost only.
+If the option value is non-numeric, it is assumed to be a path to UNIX
+domain socket to which a client can connect to.
+
 .SH EXAMPLE USAGE
 .SS Handle traffic on eth0 and eth2 only, but only with IPv6 addresses
 
@@ -108,6 +138,50 @@ multicast address (`fe02::c`) is used.
 .PP
 Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
 allowed.
+.SH SERVER INTERFACE
+When the discovery mode is used, wsdd provides a text-based line-oriented
+server interface to query information and trigger actions. The interface can be
+used with TCP and UNIX domain sockets (see above). The TCP socket is bound to
+the local host only. The following commands can be issued:
+.SS probe - Search for devices
+\fBprobe \fI[INTERFACE]\fR
+
+Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
+WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
+A Probe messages initiates the discovery message flow. It may take some time for
+hosts to be actually discovered.
+.SS list - List discovered devices
+\fBlist\fR
+
+Returns a tab-separated list of discovered devices with the following information:
+.TP
+UUID
+UUID of the discovered device. Note that a multi-homed device should appear
+only once but with multiple addresses (see below)
+.TP
+name
+The name reported by the device. For discovered Windows hosts, it is the
+configured computer name that is reported here.
+.TP
+association
+Specifies the domain or workgroup to which the discovered host belongs to.  The
+type of the association (workgroup or domain) is separated from its value by a
+colon.
+.TP
+last_seen
+The date and time the device was last seen as a consequence of Probe/Hello
+messages provided in ISO8601 with seconds.
+.TP
+addresses
+List of all transport addresses that were collected during the discovery
+process delimited by commas.  Addresses are provided along with the interface
+(separated by '%') on which they were discovered.  IPv6 addresses are reported
+on square brackets. Note that the reported addresses may not match the actual
+device on which the device may be reached.
+.SS clear - Clear list of discovered devices \fBclear\fR
+
+Clears the list of all discovered devices. Use the \fBprobe\fR command to search
+for devices again.
 .SH SECURITY
 .PP
 wsdd does not implement any security feature, e.g. by using TLS for the http
