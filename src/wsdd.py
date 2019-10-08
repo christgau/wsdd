@@ -185,6 +185,8 @@ WSD_MCAST_GRP_V6 = 'ff02::c'  # link-local
 WSA_ANON = WSA_URI + '/role/anonymous'
 WSA_DISCOVERY = 'urn:schemas-xmlsoap-org:ws:2005:04:discovery'
 
+MIME_TYPE_SOAP_XML = 'application/soap+xml'
+
 # protocol assignments (WSD spec/Section 2.4)
 WSD_UDP_PORT = 3702
 WSD_HTTP_PORT = 5357
@@ -501,7 +503,8 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         if s.path != '/' + str(args.uuid):
             s.send_error(404)
 
-        if s.headers['Content-Type'] != 'application/soap+xml':
+        ct = s.headers['Content-Type']
+        if ct is None or not ct.startswith(MIME_TYPE_SOAP_XML):
             s.send_error(400, 'Invalid Content-Type')
 
         content_length = int(s.headers['Content-Length'])
@@ -510,7 +513,7 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         response = wsd_handle_message(body, None, None)
         if response:
             s.send_response(200)
-            s.send_header('Content-Type', 'application/soap+xml')
+            s.send_header('Content-Type', MIME_TYPE_SOAP_XML)
             s.end_headers()
             s.wfile.write(response)
         else:
