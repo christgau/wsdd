@@ -518,7 +518,7 @@ class WSDClient(WSDUDPMessageHandler):
         rm_path = 'wsd:ResolveMatches/wsd:ResolveMatch'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, rm_path)
         if not endpoint or not xaddrs:
-            logger.warn('resolve match without endpoint/xaddr')
+            logger.warning('resolve match without endpoint/xaddr')
             return
 
         xaddr = xaddrs.strip()
@@ -628,7 +628,7 @@ class WSDHost(WSDUDPMessageHandler):
 
         if scopes:
             # THINK: send fault message (see p. 21 in WSD)
-            logger.warn('Scopes are not supported but were probed: {}.'.format(
+            logger.warning('Scopes are not supported but were probed: {}.'.format(
                 scopes))
             return None, None
 
@@ -1066,7 +1066,7 @@ def main():
             return 3
 
     if args.chroot and (os.getuid() == 0 or os.getgid() == 0):
-        logger.warn('chrooted but running as root, consider -u option')
+        logger.warning('chrooted but running as root, consider -u option')
 
     # main loop, serve requests coming from any outbound socket
     signal.signal(signal.SIGTERM, sigterm_handler)
