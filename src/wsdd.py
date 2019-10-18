@@ -29,9 +29,11 @@ import http
 import http.server
 import urllib.request
 import urllib.parse
+import socketserver
 import os
 import pwd
 import grp
+import datetime
 
 
 # sockaddr C type, with a larger data field to capture IPv6 addresses
@@ -63,10 +65,10 @@ class MulticastInterface:
     A class for handling multicast traffic on a given interface for a
     given address family. It provides multicast sender and receiver sockets
     """
-    def __init__(self, family, address, intf_name):
+    def __init__(self, family, address, intf_name, selector):
         self.address = address
         self.family = family
-        self.interface = intf_name
+        self.name = intf_name
         self.recv_socket = socket.socket(self.family, socket.SOCK_DGRAM)
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
@@ -74,20 +76,26 @@ class MulticastInterface:
         self.multicast_address = None
         self.listen_address = None
 
+        self.message_handlers = {}
+        self.selector = selector
+
         if family == socket.AF_INET:
             self.init_v4()
         elif family == socket.AF_INET6:
             self.init_v6()
 
         logger.info('joined multicast group {0} on {2}%{1}'.format(
-            self.multicast_address, self.interface, self.address))
+            self.multicast_address, self.name, self.address))
         logger.debug('transport address on {0} is {1}'.format(
-            self.interface, self.transport_address))
+            self.name, self.transport_address))
         logger.debug('will listen for HTTP traffic on address {0}'.format(
             self.listen_address))
 
+        self.selector.register(self.recv_socket, selectors.EVENT_READ, self)
+        self.selector.register(self.send_socket, selectors.EVENT_READ, self)
+
     def init_v6(self):
-        idx = socket.if_nametoindex(self.interface)
+        idx = socket.if_nametoindex(self.name)
         self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
 
         # v6: member_request = { multicast_addr, intf_idx }
@@ -117,7 +125,7 @@ class MulticastInterface:
         self.listen_address = (self.address, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self):
-        idx = socket.if_nametoindex(self.interface)
+        idx = socket.if_nametoindex(self.name)
         self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
@@ -141,6 +149,37 @@ class MulticastInterface:
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
 
         self.listen_address = (self.address, WSD_HTTP_PORT)
+
+    def add_handler(self, socket, handler):
+        try:
+            self.selector.register(socket, selectors.EVENT_READ, self)
+        except KeyError:
+            # accept attempts of multiple registrations
+            pass
+
+        if socket in self.message_handlers:
+            self.message_handlers[socket].append(handler)
+        else:
+            self.message_handlers[socket] = [handler]
+
+    def remove_handler(self, socket, handler):
+        if socket in self.message_handlers:
+            if handler in self.message_handlers[socket]:
+                self.message_handlers[socket].remove(handler)
+
+    def handle_request(self, key):
+        s = None
+        if key.fileobj == self.send_socket:
+            s = self.send_socket
+        elif key.fileobj == self.recv_socket:
+            s = self.recv_socket
+        else:
+            return
+
+        msg, address = s.recvfrom(WSD_MAX_LEN)
+        if s in self.message_handlers:
+            for handler in self.message_handlers[s]:
+                handler.handle_request(msg, address)
 
 
 # constants for WSD XML/SOAP parsing
@@ -184,6 +223,8 @@ WSD_UDP_PORT = 3702
 WSD_HTTP_PORT = 5357
 WSD_MAX_LEN = 32767
 
+WSDD_LISTEN_PORT = 5359
+
 # SOAP/UDP transmission constants
 MULTICAST_UDP_REPEAT = 4
 UNICAST_UDP_REPEAT = 2
@@ -193,7 +234,7 @@ UDP_UPPER_DELAY = 500
 
 # servers must recond in 4 seconds after probe arrives
 PROBE_TIMEOUT = 4
-MAX_STARUP_PROBE_DELAY = 3
+MAX_STARTUP_PROBE_DELAY = 3
 
 # some globals
 wsd_instance_id = int(time.time())
@@ -204,7 +245,7 @@ logger = None
 
 
 class WSDMessageHandler(object):
-    known_messages = []
+    known_messages = collections.deque([], WSD_MAX_KNOWN_MESSAGES)
 
     def __init__(self):
         self.handlers = {}
@@ -300,7 +341,7 @@ class WSDMessageHandler(object):
 
         if interface:
             logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
-                src_address[0], src_address[1], interface.interface,
+                src_address[0], src_address[1], interface.name,
                 action_method, msg_id
             ))
         else:
@@ -331,8 +372,6 @@ class WSDMessageHandler(object):
             return True
 
         type(self).known_messages.append(msg_id)
-        if len(type(self).known_messages) > WSD_MAX_KNOWN_MESSAGES:
-            type(self).known_messages.popleft()
 
         return False
 
@@ -367,7 +406,7 @@ class WSDUDPMessageHandler(WSDMessageHandler):
 
         if msg_type:
             logger.debug('scheduling {0} message via {1} to {2}'.format(
-                msg_type, self.interface.interface, address))
+                msg_type, self.interface.name, address))
 
         msg_count = (
             MULTICAST_UDP_REPEAT
@@ -418,15 +457,14 @@ class WSDDiscoveredDevice(object):
             self.addresses[interface].add(addr)
 
         self.last_seen = time.time()
-        # TODO make all the information accessible via server interface
-        logger.info('discovered {} in {} on {}({})'.format(
+        logger.info('discovered {} in {} on {}%{}'.format(
             self.props['DisplayName'], self.props['BelongsTo'], addr,
-            interface.interface))
+            interface.name))
         logger.debug(str(self.props))
 
     def extract_wsdp_props(self, root, target_dict, dialect):
         _, _, propsRoot = dialect.rpartition('/')
-        # XPath support is limited, to filter by namespace on our own
+        # XPath support is limited, so filter by namespace on our own
         nodes = root.findall('./wsdp:{0}/*'.format(propsRoot), namespaces)
         ns_prefix = '{{{}}}'.format(WSDP_URI)
         prop_nodes = [n for n in nodes if n.tag.startswith(ns_prefix)]
@@ -444,22 +482,20 @@ class WSDDiscoveredDevice(object):
         target_dict['DisplayName'], _, target_dict['BelongsTo'] = (
             comp.partition('/'))
 
-    def remove_xaddr(self):
-        pass
-
-    def has_addresses(self):
-        return False
-
 
 class WSDClient(WSDUDPMessageHandler):
 
-    def __init__(self, interface, selector):
+    def __init__(self, interface, known_devices):
         super().__init__(interface)
 
-        selector.register(interface.send_socket, selectors.EVENT_READ, self)
+        self.interface.add_handler(self.interface.send_socket, self)
+        self.interface.add_handler(self.interface.recv_socket, self)
 
         self.probes = {}
-        self.known_devices = {}
+        self.known_devices = known_devices
+
+        self.handlers[WSD_HELLO] = self.handle_hello
+        self.handlers[WSD_BYE] = self.handle_bye
         self.handlers[WSD_PROBE_MATCH] = self.handle_probe_match
         self.handlers[WSD_RESOLVE_MATCH] = self.handle_resolve_match
 
@@ -476,15 +512,34 @@ class WSDClient(WSDUDPMessageHandler):
 
     def startup(self):
         # avoid packet storm when hosts come up by delaying initial probe
-        time.sleep(random.randint(0, MAX_STARUP_PROBE_DELAY))
+        time.sleep(random.randint(0, MAX_STARTUP_PROBE_DELAY))
         self.send_probe()
 
     def teardown(self):
         self.remove_outdated_probes()
 
-    def handle_request(self):
-        msg, address = self.interface.send_socket.recvfrom(WSD_MAX_LEN)
+    def handle_request(self, msg, address):
         self.handle_message(msg, self.interface, address)
+
+    def handle_hello(self, header, body):
+        pm_path = 'wsd:Hello'
+        endpoint, xaddrs = self.extract_endpoint_metadata(body, pm_path)
+        if not xaddrs:
+            logger.info('Hello without XAddrs, sending resolve')
+            msg = self.build_resolve_message(endpoint)
+            self.enqueue_datagram(msg)
+            return
+
+        xaddr = xaddrs.strip()
+        logger.info('Hello from {} on {}'.format(endpoint, xaddr))
+        self.perform_metadata_exchange(endpoint, xaddr)
+
+    def handle_bye(self, header, body):
+        bye_path = 'wsd:Bye'
+        endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
+        device_uuid = str(uuid.UUID(endpoint))
+        if device_uuid in self.known_devices:
+            del(self.known_devices[device_uuid])
 
     def handle_probe_match(self, header, body):
         # do not handle to probematches issued not sent by ourself
@@ -537,16 +592,24 @@ class WSDClient(WSDUDPMessageHandler):
             logger.debug('invalid XAddr: {}'.format(xaddr))
             return
 
+        host = None
         url = xaddr
         if self.interface.family == socket.AF_INET6:
-            url = url.replace(']', '%{}]'.format(self.interface.interface))
+            host = '[{}]'.format(url.partition('[')[2].partition(']')[0])
+            url = url.replace(']', '%{}]'.format(self.interface.name))
 
         body = self.build_getmetadata_message(endpoint)
         request = urllib.request.Request(url, data=body, method='POST')
         request.add_header('Content-Type', 'application/soap+xml')
         request.add_header('User-Agent', 'wsdd')
-        with urllib.request.urlopen(request) as stream:
-            self.handle_metadata(stream.read(), endpoint, xaddr)
+        if host is not None:
+            request.add_header('Host', host)
+
+        try:
+            with urllib.request.urlopen(request, None, 2.0) as stream:
+                self.handle_metadata(stream.read(), endpoint, xaddr)
+        except urllib.error.URLError as e:
+            logger.warn('could not fetch metadata from: {}'.format(url, e))
 
     def build_getmetadata_message(self, endpoint):
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
@@ -554,7 +617,7 @@ class WSDClient(WSDUDPMessageHandler):
 
     def handle_metadata(self, meta, endpoint, xaddr):
         device_uuid = str(uuid.UUID(endpoint))
-        if uuid in self.known_devices:
+        if device_uuid in self.known_devices:
             self.known_devices[device_uuid].update(meta, xaddr, self.interface)
         else:
             self.known_devices[device_uuid] = WSDDiscoveredDevice(
@@ -581,9 +644,10 @@ class WSDHost(WSDUDPMessageHandler):
 
     message_number = 0
 
-    def __init__(self, interface, selector):
+    def __init__(self, interface):
         super().__init__(interface)
-        selector.register(interface.recv_socket, selectors.EVENT_READ, self)
+
+        self.interface.add_handler(self.interface.recv_socket, self)
 
         self.handlers[WSD_PROBE] = self.handle_probe
         self.handlers[WSD_RESOLVE] = self.handle_resolve
@@ -594,11 +658,10 @@ class WSDHost(WSDUDPMessageHandler):
     def teardown(self):
         self.send_bye()
 
-    def handle_request(self):
-        msg, address = self.interface.recv_socket.recvfrom(WSD_MAX_LEN)
-        msg = self.handle_message(msg, self.interface, address)
-        if msg:
-            self.enqueue_datagram(msg, address=address)
+    def handle_request(self, msg, address):
+        reply = self.handle_message(msg, self.interface, address)
+        if reply:
+            self.enqueue_datagram(reply, address=address)
 
     def send_hello(self):
         """WS-Discovery, Section 4.1, Hello message"""
@@ -626,8 +689,7 @@ class WSDHost(WSDUDPMessageHandler):
 
         if scopes:
             # THINK: send fault message (see p. 21 in WSD)
-            logger.warning('Scopes are not supported but were probed: {}.'.format(
-                scopes))
+            logger.warning('scopes ({}) unsupported but probed'.format(scopes))
             return None, None
 
         types_elem = probe.find('./wsd:Types', namespaces)
@@ -665,7 +727,7 @@ class WSDHost(WSDUDPMessageHandler):
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
         self.add_endpoint_reference(match)
         self.add_types(match)
-        self.add_xaddr(match, xaddr)
+        self.add_xaddr(match, addr)
         self.add_metadata_version(match)
 
         return matches, WSD_RESOLVE_MATCH
@@ -773,6 +835,73 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(http.HTTPStatus.BAD_REQUEST)
 
 
+class ApiRequestHandler(socketserver.StreamRequestHandler):
+
+    def handle(self):
+        line = str(self.rfile.readline().strip(), 'utf-8')
+        if not line:
+            return
+
+        words = line.split()
+        command = words[0]
+        args = words[1:]
+        if command == 'probe':
+            intf = args[0] if args else None
+            logger.debug('probing devices on {} upon request'.format(intf))
+            for client in self.get_clients_by_interface(intf):
+                client.send_probe()
+        elif command == 'clear':
+            logger.debug('clearing list of known devices')
+            self.server.wsd_known_devices.clear()
+        elif command == 'list':
+            self.wfile.write(bytes(self.get_list_reply(), 'utf-8'))
+        else:
+            logger.debug('could not handle API request: {}'.format(line))
+
+    def get_clients_by_interface(self, interface):
+        return [c for c in self.server.wsd_clients if
+                c.interface.name == interface or not interface]
+
+    def get_list_reply(self):
+        retval = ''
+        for dev_uuid in self.server.wsd_known_devices:
+            dev = self.server.wsd_known_devices[dev_uuid]
+            addrs_str = []
+            for mci, addrs in dev.addresses.items():
+                addrs_str.append(', '.join(['{}%{}'.format(a, mci.name)
+                                 for a in addrs]))
+
+            retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
+                dev_uuid,
+                dev.props['DisplayName'],
+                dev.props['BelongsTo'],
+                datetime.datetime.fromtimestamp(dev.last_seen).isoformat(
+                    'T', 'seconds'),
+                ','.join(addrs_str))
+
+        return retval
+
+
+class ApiServer(object):
+
+    def __init__(self, selector, listen_address, clients, known_devices):
+        self.clients = clients
+
+        if isinstance(listen_address, int) or listen_address.isnumeric():
+            s_addr = ('localhost', int(listen_address))
+            socketserver.TCPServer.allow_reuse_address = True
+            s = socketserver.TCPServer(s_addr, ApiRequestHandler)
+        else:
+            s = socketserver.UnixStreamServer(
+                listen_address, ApiRequestHandler)
+
+        # quiet hacky
+        s.wsd_clients = clients
+        s.wsd_known_devices = known_devices
+
+        selector.register(s.fileno(), selectors.EVENT_READ, s)
+
+
 def enumerate_host_interfaces():
     """Get all addresses of all installed interfaces, except loopback"""
     libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
@@ -857,7 +986,7 @@ def parse_args():
         help='set workgroup name (default WORKGROUP)',
         default='WORKGROUP')
     parser.add_argument(
-        '-t', '--nohttp',
+        '-t', '--no-http',
         help='disable http service (for debugging, e.g.)',
         action='store_true')
     parser.add_argument(
@@ -889,8 +1018,12 @@ def parse_args():
         help='enable discovery operation mode',
         action='store_true')
     parser.add_argument(
+        '-l', '--listen',
+        help='listen on path or localhost port in discovery mode',
+        default=None)
+    parser.add_argument(
         '-o', '--no-host',
-        help='disable host operation',
+        help='disable server mode operation (host will be undiscoverable)',
         action='store_true')
 
     args = parser.parse_args(sys.argv[1:])
@@ -1032,19 +1165,31 @@ def main():
 
     s = selectors.DefaultSelector()
     handlers = []
+    clients = []
+    known_devices = {}
 
     for address in addresses:
-        interface = MulticastInterface(address[1], address[2], address[0])
+        interface = MulticastInterface(address[1], address[2], address[0], s)
 
         if not args.no_host:
-            handlers.append(WSDHost(interface, s))
-            if not args.nohttp:
-                http_srv = WSDHttpServer(
-                    interface.listen_address, WSDHttpRequestHandler,
-                    interface.family, s)
+            handlers.append(WSDHost(interface))
+            if not args.no_http:
+                WSDHttpServer(interface.listen_address, WSDHttpRequestHandler,
+                              interface.family, s)
 
         if args.discovery:
-            handlers.append(WSDClient(interface, s))
+            clients.append(WSDClient(interface, known_devices))
+            handlers.append(clients[-1])
+
+    if not args.discovery and args.listen:
+        logger.warning('Listen option ignored since discovery is disabled.')
+    elif args.discovery and not args.listen:
+        logger.warning('Discovery enabled but no listen option provided. '
+                       'Falling back to port {}'.format(WSDD_LISTEN_PORT))
+        args.listen = WSDD_LISTEN_PORT
+
+    if args.listen:
+        ApiServer(s, args.listen, clients, known_devices)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:
@@ -1075,7 +1220,10 @@ def main():
                 timeout = send_outstanding_messages()
                 events = s.select(timeout)
                 for key, mask in events:
-                    key.data.handle_request()
+                    if isinstance(key.data, MulticastInterface):
+                        key.data.handle_request(key)
+                    else:
+                        key.data.handle_request()
             except (SystemExit, KeyboardInterrupt):
                 # silently exit the loop
                 logger.debug('got termination signal')
