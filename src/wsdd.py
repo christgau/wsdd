@@ -903,26 +903,31 @@ class ApiServer(object):
 
 
 def enumerate_host_interfaces():
-    """Get all addresses of all installed interfaces, except loopback"""
+    """Get all addresses of all installed interfaces except loopbacks"""
     libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
     addr = ctypes.POINTER(if_addrs)()
     retval = libc.getifaddrs(ctypes.byref(addr))
     if retval:
         raise OSError(ctypes.get_errno())
 
+    IFF_LOOPBACK = 0x8  # common value for Linux, Free/OpenBSD
+
     addrs = []
     ptr = addr
     while ptr:
         deref = ptr[0]
         family = deref.addr[0].family if deref.addr else None
-        if family == socket.AF_INET:
+        dev_name = deref.name.decode()
+        if deref.flags & IFF_LOOPBACK != 0:
+            logger.debug('ignoring loop-back interface {}'.format(dev_name))
+        elif family == socket.AF_INET:
             addrs.append((
-                deref.name.decode(), family,
+                dev_name, family,
                 socket.inet_ntop(family, bytes(deref.addr[0].data[2:6]))))
         elif family == socket.AF_INET6:
             if bytes(deref.addr[0].data[6:8]) == b'\xfe\x80':
                 addrs.append((
-                    deref.name.decode(), family,
+                    dev_name, family,
                     socket.inet_ntop(family, bytes(deref.addr[0].data[6:22]))))
 
         ptr = deref.next
@@ -930,14 +935,12 @@ def enumerate_host_interfaces():
     libc.freeifaddrs(addr)
 
     # filter detected addresses by command line arguments,
-    # always exclude 'lo' interface
     if args.ipv4only:
         addrs = [x for x in addrs if x[1] == socket.AF_INET]
 
     if args.ipv6only:
         addrs = [x for x in addrs if x[1] == socket.AF_INET6]
 
-    addrs = [x for x in addrs if not x[0].startswith('lo')]
     if args.interface:
         addrs = [x for x in addrs if x[0] in args.interface]
 
