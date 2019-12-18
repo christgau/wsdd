@@ -821,7 +821,8 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         if self.path != '/' + str(args.uuid):
             self.send_error()
 
-        if self.headers['Content-Type'] != 'application/soap+xml':
+        ct = self.headers['Content-Type']
+        if ct is None or not ct.startswith(MIME_TYPE_SOAP_XML):
             self.send_error(http.HTTPStatus.NOT_FOUND, 'Invalid Content-Type')
 
         content_length = int(self.headers['Content-Length'])
@@ -830,7 +831,7 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         response = self.server.wsd_handler.handle_message(body, None, None)
         if response:
             self.send_response(http.HTTPStatus.OK)
-            self.send_header('Content-Type', 'application/soap+xml')
+            self.send_header('Content-Type', MIME_TYPE_SOAP_XML)
             self.end_headers()
             self.wfile.write(response)
         else:
