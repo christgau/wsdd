@@ -208,6 +208,9 @@ send_queue = []
 args = None
 logger = None
 
+# for storing remote hosts
+remotes = []
+
 
 # shortcuts for building WSD responses
 def wsd_add_metadata_version(parent):
@@ -220,10 +223,12 @@ def wsd_add_types(parent):
     dev_type.text = WSD_TYPE_DEVICE_COMPUTER
 
 
-def wsd_add_endpoint_reference(parent):
+def wsd_add_endpoint_reference(parent, eUuid=None):
     endpoint = ElementTree.SubElement(parent, 'wsa:EndpointReference')
     address = ElementTree.SubElement(endpoint, 'wsa:Address')
-    address.text = args.uuid.urn
+    if eUuid is None:
+        eUuid = args.uuid
+    address.text = eUuid.urn
 
 
 def wsd_add_xaddr(parent, transport_addr):
@@ -300,14 +305,25 @@ def wsd_handle_probe(probe):
     if not types == WSD_TYPE_DEVICE:
         logger.debug('unknown discovery type ({0}) during probe'.format(types))
         return None
+    messages = []
 
     matches = ElementTree.Element('wsd:ProbeMatches')
     match = ElementTree.SubElement(matches, 'wsd:ProbeMatch')
-    wsd_add_endpoint_reference(match)
+    wsd_add_endpoint_reference(match, args.uuid)
     wsd_add_types(match)
     wsd_add_metadata_version(match)
 
-    return matches
+    messages.append(matches)
+
+    # Send the responses for the remote machines
+    for r in range(len(remotes)):
+        matches = ElementTree.Element('wsd:ProbeMatches')
+        match = ElementTree.SubElement(matches, 'wsd:ProbeMatch')
+        wsd_add_endpoint_reference(match, remotes[r]["uuid"])
+        wsd_add_types(match)
+        wsd_add_metadata_version(match)
+        messages.append(matches)
+    return messages
 
 
 def wsd_handle_resolve(resolve, xaddr):
@@ -316,14 +332,23 @@ def wsd_handle_resolve(resolve, xaddr):
         logger.debug('invalid resolve request: missing endpoint address')
         return None
 
-    if not addr.text == args.uuid.urn:
-        logger.debug(('invalid resolve request: address ({}) does not match '
-                      'own one ({})').format(addr.text, args.uuid.urn))
+    # Find if addr matches the local or remote uuid
+    rUuid = None
+    if addr.text == args.uuid.urn:
+        rUuid = args.uuid
+    for r in range(len(remotes)):
+        if addr.text == remotes[r]["uuid"].urn:
+            rUuid = remotes[r]["uuid"]
+            break
+
+    if rUuid is None:
+        logger.debug(('invalid resolve request: address ({}) does' +
+                      'not match').format(addr.text))
         return None
 
     matches = ElementTree.Element('wsd:ResolveMatches')
     match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
-    wsd_add_endpoint_reference(match)
+    wsd_add_endpoint_reference(match, rUuid)
     wsd_add_types(match)
     wsd_add_xaddr(match, xaddr)
     wsd_add_metadata_version(match)
@@ -331,14 +356,31 @@ def wsd_handle_resolve(resolve, xaddr):
     return matches
 
 
-def wsd_handle_get():
+def wsd_handle_get(toUuid):
     # see https://msdn.microsoft.com/en-us/library/hh441784.aspx for an example
+    # Get hostname, and workgroup, based on uuid
+    gHostname = None
+    toUuid = str(toUuid)
+    if toUuid == str(args.uuid):
+        gHostname = args.hostname
+        gUuid = args.uuid
+        gWorkgroup = args.workgroup
+    else:
+        for r in range(len(remotes)):
+            if toUuid == str(remotes[r]["uuid"]):
+                gHostname = remotes[r]["host"]
+                gUuid = remotes[r]["uuid"]
+                gWorkgroup = remotes[r]["workgroup"]
+                break
+    if gHostname is None:
+        logger.error("GET request for invalid UUID")
+        return None
     metadata = ElementTree.Element('wsx:Metadata')
     section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {
         'Dialect': WSDP_URI + '/ThisDevice'})
     device = ElementTree.SubElement(section, 'wsdp:ThisDevice')
     ElementTree.SubElement(device, 'wsdp:FriendlyName').text = (
-            'WSD Device {0}'.format(args.hostname))
+            'WSD Device {0}'.format(gHostname))
     ElementTree.SubElement(device, 'wsdp:FirmwareVersion').text = '1.0'
     ElementTree.SubElement(device, 'wsdp:SerialNumber').text = '1'
 
@@ -356,17 +398,17 @@ def wsd_handle_get():
     host = ElementTree.SubElement(rel, 'wsdp:Host')
     wsd_add_endpoint_reference(host)
     ElementTree.SubElement(host, 'wsdp:Types').text = PUB_COMPUTER
-    ElementTree.SubElement(host, 'wsdp:ServiceId').text = args.uuid.urn
+    ElementTree.SubElement(host, 'wsdp:ServiceId').text = gUuid.urn
     if args.domain:
         ElementTree.SubElement(host, PUB_COMPUTER).text = (
             '{0}/Domain:{1}'.format(
-                args.hostname if args.preserve_case else args.hostname.lower(),
+                gHostname if args.preserve_case else gHostname.lower(),
                 args.domain))
     else:
         ElementTree.SubElement(host, PUB_COMPUTER).text = (
             '{0}/Workgroup:{1}'.format(
-                args.hostname if args.preserve_case else args.hostname.upper(),
-                args.workgroup.upper()))
+                gHostname if args.preserve_case else gHostname.upper(),
+                gWorkgroup.upper()))
 
     return metadata
 
@@ -394,6 +436,10 @@ def wsd_handle_message(data, interface, src_address):
     tree = ElementTree.fromstring(data)
     header = tree.find('./soap:Header', namespaces)
     msg_id = header.find('./wsa:MessageID', namespaces).text
+    to = header.find('./wsa:To', namespaces).text
+    toUuid = None
+    if to != 'urn:schemas-xmlsoap-org:ws:2005:04:discovery':
+        toUuid = uuid.UUID(to)
 
     # if message came over multicast interface, check for duplicates
     if interface and wsd_is_duplicated_msg(msg_id):
@@ -419,8 +465,14 @@ def wsd_handle_message(data, interface, src_address):
     if action == WSD_PROBE:
         probe = body.find('./wsd:Probe', namespaces)
         response = wsd_handle_probe(probe)
-        return wsd_build_message(WSA_ANON, WSD_PROBE_MATCH, header,
-                                 response) if response else None
+        if response is None:
+            return None
+        messages = []
+        for res in range(len(response)):
+            messages.append(wsd_build_message(WSA_ANON, WSD_PROBE_MATCH,
+                            header, response[res]))
+        return messages
+
     elif action == WSD_RESOLVE:
         resolve = body.find('./wsd:Resolve', namespaces)
         response = wsd_handle_resolve(resolve, interface.transport_address)
@@ -431,7 +483,7 @@ def wsd_handle_message(data, interface, src_address):
             WSA_ANON,
             WSD_GET_RESPONSE,
             header,
-            wsd_handle_get())
+            wsd_handle_get(toUuid))
     else:
         logger.debug('unhandled action {0}/{1}'.format(action, msg_id))
         return None
@@ -446,7 +498,13 @@ class WSDUdpRequestHandler():
         msg, address = self.interface.recv_socket.recvfrom(WSD_MAX_LEN)
         msg = wsd_handle_message(msg, self.interface, address)
         if msg:
-            self.enqueue_datagram(msg, address=address)
+            # There are same cases when we should send more answers to one
+            # request, when we have remote machines added
+            if type(msg) is list:
+                for m in range(len(msg)):
+                    self.enqueue_datagram(msg[m], address=address)
+            else:
+                self.enqueue_datagram(msg, address=address)
 
     def send_hello(self):
         """WS-Discovery, Section 4.1, Hello message"""
@@ -460,6 +518,15 @@ class WSDUdpRequestHandler():
         msg = wsd_build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
         self.enqueue_datagram(msg, msg_type='Hello')
 
+        # Send hello for remote machines
+        for r in range(len(remotes)):
+            hello = ElementTree.Element('wsd:Hello')
+            wsd_add_endpoint_reference(hello, remotes[r]['uuid'])
+            wsd_add_xaddr(hello, self.interface.transport_address)
+            wsd_add_metadata_version(hello)
+            msg = wsd_build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
+            self.enqueue_datagram(msg, msg_type='Hello')
+
     def send_bye(self):
         """WS-Discovery, Section 4.2, Bye message"""
         bye = ElementTree.Element('wsd:Bye')
@@ -467,6 +534,13 @@ class WSDUdpRequestHandler():
 
         msg = wsd_build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
         self.enqueue_datagram(msg, msg_type='Bye')
+
+        # Send Bye for remote machines
+        for r in range(len(remotes)):
+            bye = ElementTree.Element('wsd:Bye')
+            wsd_add_endpoint_reference(bye, remotes[r]['uuid'])
+            msg = wsd_build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
+            self.enqueue_datagram(msg, msg_type='Bye')
 
     def enqueue_datagram(self, msg, address=None, msg_type=None):
         """
@@ -500,7 +574,12 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         logger.info("{} - - ".format(self.address_string()) + fmt % args)
 
     def do_POST(s):
-        if s.path != '/' + str(args.uuid):
+        validPath = ['/'+str(args.uuid)]
+        for r in range(len(remotes)):
+            validPath.append('/'+str(remotes[r]["uuid"]))
+
+        if s.path not in validPath:
+            logger.warning("http request for invalid path {}".format(s.path))
             s.send_error(404)
 
         ct = s.headers['Content-Type']
@@ -634,6 +713,11 @@ def parse_args():
         '-u', '--user',
         help='drop privileges to user:group',
         default=None)
+    parser.add_argument(
+        '-r', '--remote',
+        help='beside the local machine serve also remote machines,' +
+             'format: host/workgroup',
+        action='append', default=[])
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -665,6 +749,18 @@ def parse_args():
 
     for prefix, uri in namespaces.items():
         ElementTree.register_namespace(prefix, uri)
+
+    for r in range(len(args.remote)):
+        rparts = args.remote[r].split("/")
+        rhost = rparts[0]
+        if len(rparts) < 2:
+            rworkgroup = "Workgroup"
+        else:
+            rworkgroup = rparts[1]
+        ruuid = uuid.uuid5(uuid.NAMESPACE_DNS, rhost)
+        remotes.append({"host": rhost, "workgroup": rworkgroup, "uuid": ruuid})
+        logger.info('user-supplied remote host {0}, workgroup {1}, uuid {2}'
+                    .format(rhost, rworkgroup, str(ruuid)))
 
 
 def send_outstanding_messages(block=False):

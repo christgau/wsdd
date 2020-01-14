@@ -154,6 +154,10 @@ allowed.
      Restrict to the given address family. If both options are specified no
      addreses will be available and wsdd will exit.
 
+ * `-r`, `--remote`
+
+     Add remote machines, format: host/workgroup, you can use it multiple times. After discovery, the machine will appear as "host", make sure, that it can be reached on that name
+
 ## Example Usage
 
  * handle traffic on eth0 only, but only with IPv6 addresses
