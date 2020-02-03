@@ -779,7 +779,25 @@ def serve_wsd_requests(addresses):
                 http.server.HTTPServer
                 if interface.family == socket.AF_INET
                 else HTTPv6Server)
-            http_srv = klass(interface.listen_address, WSDHttpRequestHandler)
+            logger.info('Interface address: {}'
+                        .format(interface.listen_address[0]))
+            retries = 0
+            while True:
+                try:
+                    http_srv = klass(interface.listen_address,
+                                     WSDHttpRequestHandler)
+                    break
+                except OSError:
+                    logger.warning('Http server start failed, retrying, \
+                                    interface address: {}'
+                                   .format(interface.listen_address[0]))
+                    retries += 1
+                    if retries > 10:
+                        logger.error('Http server start failed, exiting, \
+                                     interface address: {}'
+                                     .format(interface.listen_address[0]))
+                        return 0
+                    time.sleep(1)
             s.register(http_srv.fileno(), selectors.EVENT_READ, http_srv)
 
     # get uid:gid before potential chroot'ing
