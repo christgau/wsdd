@@ -44,7 +44,47 @@ Although Samba is not strictly required by wsdd itself, it makes sense to run
 wsdd only on hosts with a running Samba daemon. Note that the OpenRC/Gentoo
 init script depends on the Samba service.
 
-# Installation and Usage
+# Installation
+
+## Operating System and Distribution-Dependant Instructions
+
+### Arch Linux
+
+Install wsdd from the [AUR package](https://aur.archlinux.org/wsdd.git).
+
+### CentOS, Fedora, RHEL
+
+wsdd is included in RedHat/CentOS' EPEL repository. After setting that up, you
+can install wsdd like on Fedora where it is sufficient to issue
+
+`dnf install wsdd`
+
+### Debian/Ubuntu
+
+There are user-maintained packages for which you need to add the repository to
+`/etc/apt/sources.list.d` with a file containing the following line
+
+`deb https://pkg.ltec.ch/public/ distro main`
+
+Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
+`lsb-release -cs` if unsure). After an `apt update` you can install wsdd with
+`apt install wsdd`. You may also add the public key to the trusted ones on your
+system.
+
+### Gentoo
+
+You can choose between two overlays: the GURU project and an [author-maintained
+dedicated overlay](https://github.com/christgau/wsdd-gentoo).  After setting up
+one of them you can install wsdd with
+
+```
+emerge eselect-repository
+eselect repository enable guru
+emerge --sync
+emerge wsdd
+```
+
+## Generic Installation Instructions
 
 No installation steps are required. Just place the wsdd.py file anywhere you
 want to, rename it to wsdd, and run it from there. The init scripts/unit files
@@ -58,6 +98,8 @@ different init(1) systems, namely FreeBSD's rc.d, Gentoo's openrc, and systemd
 which is used in most contemporary Linux distros. Those files may be used as
 templates for their actual usage. They are likely to require adjustments to the
 actual distribution/installation where they are to be used.
+
+# Usage
 
 ## Firewall Setup
 
