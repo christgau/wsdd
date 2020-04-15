@@ -35,15 +35,16 @@ import grp
 import datetime
 
 
-class MulticastInterface:
+class MulticastHandler:
     """
     A class for handling multicast traffic on a given interface for a
     given address family. It provides multicast sender and receiver sockets
     """
-    def __init__(self, family, address, intf, selector):
+    # TODO: this one needs some cleanup
+    def __init__(self, family, address, interface, selector):
         self.address = address
         self.family = family
-        self.net_if = intf
+        self.interface = interface
         self.recv_socket = socket.socket(self.family, socket.SOCK_DGRAM)
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
@@ -60,9 +61,9 @@ class MulticastInterface:
             self.init_v6()
 
         logger.info('joined multicast group {0} on {2}%{1}'.format(
-            self.multicast_address, self.net_if.name, self.address))
+            self.multicast_address, self.interface.name, self.address))
         logger.debug('transport address on {0} is {1}'.format(
-            self.net_if.name, self.transport_address))
+            self.interface.name, self.transport_address))
         logger.debug('will listen for HTTP traffic on address {0}'.format(
             self.listen_address))
 
@@ -78,10 +79,10 @@ class MulticastInterface:
 
     def handles(self, family, addr, interface):
         return (self.family == family and self.address == addr and
-                self.net_if.name == interface.name)
+                self.interface.name == interface.name)
 
     def init_v6(self):
-        idx = socket.if_nametoindex(self.net_if.name)
+        idx = socket.if_nametoindex(self.interface.name)
         self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
 
         # v6: member_request = { multicast_addr, intf_idx }
@@ -111,7 +112,7 @@ class MulticastInterface:
         self.listen_address = (self.address, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self):
-        idx = socket.if_nametoindex(self.net_if.name)
+        idx = socket.if_nametoindex(self.interface.name)
         self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
@@ -312,16 +313,16 @@ class WSDMessageHandler(object):
     def add_header_elements(self, header, extra):
         pass
 
-    def handle_message(self, msg, interface, src_address):
+    def handle_message(self, msg, mch, src_address):
         """
-        handle a WSD message that might be received by a MulticastInterface
+        handle a WSD message that might be received by a MulticastHandler
         """
         tree = ElementTree.fromstring(msg)
         header = tree.find('./soap:Header', namespaces)
         msg_id = header.find('./wsa:MessageID', namespaces).text
 
-        # if message came over multicast interface, check for duplicates
-        if interface and self.is_duplicated_msg(msg_id):
+        # if message came over a MulticastHandler, check for duplicates
+        if mch and self.is_duplicated_msg(msg_id):
             logger.debug('known message ({0}): dropping it'.format(msg_id))
             return None
 
@@ -330,9 +331,9 @@ class WSDMessageHandler(object):
         body = tree.find('./soap:Body', namespaces)
         _, _, action_method = action.rpartition('/')
 
-        if interface:
+        if mch:
             logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
-                src_address[0], src_address[1], interface.net_if.name,
+                src_address[0], src_address[1], mch.interface.name,
                 action_method, msg_id
             ))
         else:
@@ -374,11 +375,14 @@ class WSDMessageHandler(object):
 
 
 class WSDUDPMessageHandler(WSDMessageHandler):
+    """
+    A message handler that handles traffic received via MutlicastHandler.
+    """
 
-    def __init__(self, interface):
+    def __init__(self, mch):
         super().__init__()
 
-        self.interface = interface
+        self.mch = mch
 
     def teardown(self):
         pass
@@ -390,21 +394,21 @@ class WSDUDPMessageHandler(WSDMessageHandler):
         Implements SOAP over UDP, Appendix I.
         """
         if not address:
-            address = self.interface.multicast_address
+            address = self.mch.multicast_address
 
         if msg_type:
             logger.debug('scheduling {0} message via {1} to {2}'.format(
-                msg_type, self.interface.net_if.name, address))
+                msg_type, self.mch.interface.name, address))
 
         msg_count = (
             MULTICAST_UDP_REPEAT
-            if address == self.interface.multicast_address
+            if address == self.mch.multicast_address
             else UNICAST_UDP_REPEAT)
 
         due_time = time.time()
         t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
         for i in range(msg_count):
-            send_queue.append([due_time, self.interface, address, msg])
+            send_queue.append([due_time, self.mch, address, msg])
             due_time += t / 1000
             t = min(t * 2, UDP_UPPER_DELAY)
 
@@ -447,7 +451,7 @@ class WSDDiscoveredDevice(object):
         self.last_seen = time.time()
         logger.info('discovered {} in {} on {}%{}'.format(
             self.props['DisplayName'], self.props['BelongsTo'], addr,
-            interface.net_if.name))
+            interface.interface.name))
         logger.debug(str(self.props))
 
     def extract_wsdp_props(self, root, target_dict, dialect):
@@ -473,11 +477,11 @@ class WSDDiscoveredDevice(object):
 
 class WSDClient(WSDUDPMessageHandler):
 
-    def __init__(self, interface, known_devices):
-        super().__init__(interface)
+    def __init__(self, mch, known_devices):
+        super().__init__(mch)
 
-        self.interface.add_handler(self.interface.send_socket, self)
-        self.interface.add_handler(self.interface.recv_socket, self)
+        self.mch.add_handler(self.mch.send_socket, self)
+        self.mch.add_handler(self.mch.recv_socket, self)
 
         self.probes = {}
         self.known_devices = known_devices
@@ -492,8 +496,8 @@ class WSDClient(WSDUDPMessageHandler):
         self.send_probe()
 
     def cleanup(self):
-        self.interface.remove_handler(self.interface.send_socket, self)
-        self.interface.remove_handler(self.interface.recv_socket, self)
+        self.mch.remove_handler(self.mch.send_socket, self)
+        self.mch.remove_handler(self.mch.recv_socket, self)
 
     def send_probe(self):
         """WS-Discovery, Section 4.3, Probe message"""
@@ -510,7 +514,7 @@ class WSDClient(WSDUDPMessageHandler):
         self.remove_outdated_probes()
 
     def handle_request(self, msg, address):
-        self.handle_message(msg, self.interface, address)
+        self.handle_message(msg, self.mch, address)
 
     def handle_hello(self, header, body):
         pm_path = 'wsd:Hello'
@@ -585,9 +589,9 @@ class WSDClient(WSDUDPMessageHandler):
 
         host = None
         url = xaddr
-        if self.interface.family == socket.AF_INET6:
+        if self.mch.family == socket.AF_INET6:
             host = '[{}]'.format(url.partition('[')[2].partition(']')[0])
-            url = url.replace(']', '%{}]'.format(self.interface.net_if.name))
+            url = url.replace(']', '%{}]'.format(self.mch.interface.name))
 
         body = self.build_getmetadata_message(endpoint)
         request = urllib.request.Request(url, data=body, method='POST')
@@ -609,10 +613,10 @@ class WSDClient(WSDUDPMessageHandler):
     def handle_metadata(self, meta, endpoint, xaddr):
         device_uuid = str(uuid.UUID(endpoint))
         if device_uuid in self.known_devices:
-            self.known_devices[device_uuid].update(meta, xaddr, self.interface)
+            self.known_devices[device_uuid].update(meta, xaddr, self.mch)
         else:
             self.known_devices[device_uuid] = WSDDiscoveredDevice(
-                    meta, xaddr, self.interface)
+                    meta, xaddr, self.mch)
 
     def remove_outdated_probes(self):
         cut = time.time() - PROBE_TIMEOUT * 2
@@ -635,10 +639,10 @@ class WSDHost(WSDUDPMessageHandler):
 
     message_number = 0
 
-    def __init__(self, interface):
-        super().__init__(interface)
+    def __init__(self, mch):
+        super().__init__(mch)
 
-        self.interface.add_handler(self.interface.recv_socket, self)
+        self.mch.add_handler(self.mch.recv_socket, self)
 
         self.handlers[WSD_PROBE] = self.handle_probe
         self.handlers[WSD_RESOLVE] = self.handle_resolve
@@ -649,7 +653,7 @@ class WSDHost(WSDUDPMessageHandler):
         self.send_bye()
 
     def handle_request(self, msg, address):
-        reply = self.handle_message(msg, self.interface, address)
+        reply = self.handle_message(msg, self.mch, address)
         if reply:
             self.enqueue_datagram(reply, address=address)
 
@@ -659,7 +663,7 @@ class WSDHost(WSDUDPMessageHandler):
         self.add_endpoint_reference(hello)
         # THINK: Microsoft does not send the transport address here due
         # to privacy reasons. Could make this optional.
-        self.add_xaddr(hello, self.interface.transport_address)
+        self.add_xaddr(hello, self.mch.transport_address)
         self.add_metadata_version(hello)
 
         msg = self.build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
@@ -717,7 +721,7 @@ class WSDHost(WSDUDPMessageHandler):
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
         self.add_endpoint_reference(match)
         self.add_types(match)
-        self.add_xaddr(match, self.interface.transport_address)
+        self.add_xaddr(match, self.mch.transport_address)
         self.add_metadata_version(match)
 
         return matches, WSD_RESOLVE_MATCH
@@ -851,7 +855,7 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
 
     def get_clients_by_interface(self, interface):
         return [c for c in self.server.wsd_clients if
-                c.interface.net_if.name == interface or not interface]
+                c.mch.interface.name == interface or not interface]
 
     def get_list_reply(self):
         retval = ''
@@ -859,8 +863,8 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
             dev = self.server.wsd_known_devices[dev_uuid]
             addrs_str = []
             for mci, addrs in dev.addresses.items():
-                addrs_str.append(', '.join(['{}%{}'.format(a, mci.net_if.name)
-                                 for a in addrs]))
+                addrs_str.append(', '.join(['{}%{}'.format(
+                    a, mci.interface.name) for a in addrs]))
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
                 dev_uuid,
@@ -914,7 +918,7 @@ class NetworkAddressMonitor(object):
 
         self.clients = []
         self.hosts = []
-        self.mcis = []
+        self.mchs = []
         self.known_devices = {}
 
         self.enumerate()
@@ -962,24 +966,24 @@ class NetworkAddressMonitor(object):
         # Ignore addresses or interfaces we already handle. There can only be
         # one multicast handler per address family and network interface
         # However, multiple link-local addresses can be
-        for mci in self.mcis:
-            if mci.handles(addr_family, addr, interface):
+        for mch in self.mchs:
+            if mch.handles(addr_family, addr, interface):
                 return
 
         logger.debug('handling traffic for {} on {} now'.format(
             addr, interface.name))
-        mci = MulticastInterface(addr_family, addr, interface, self.selector)
-        self.mcis.append(mci)
+        mch = MulticastHandler(addr_family, addr, interface, self.selector)
+        self.mchs.append(mch)
 
         if not args.no_host:
-            h = WSDHost(mci)
+            h = WSDHost(mch)
             self.hosts.append(h)
             if not args.no_http:
-                WSDHttpServer(mci.listen_address, WSDHttpRequestHandler,
-                              mci.family, self.selector)
+                WSDHttpServer(mch.listen_address, WSDHttpRequestHandler,
+                              mch.family, self.selector)
 
         if args.discovery:
-            client = WSDClient(mci, self.known_devices)
+            client = WSDClient(mch, self.known_devices)
             self.clients.append(client)
 
     def handle_deleted_address(self, raw_addr, addr_family, interface):
@@ -989,25 +993,25 @@ class NetworkAddressMonitor(object):
         if not self.is_address_handled(addr_family, raw_addr, interface):
             return
 
-        mci = self.get_mci_by_address(addr_family, addr, interface)
-        if mci is None:
+        mch = self.get_mch_by_address(addr_family, addr, interface)
+        if mch is None:
             return
 
         # Do not tear the client/hosts down. Saying goodbye does not work
         # because the address is already gone.
         for c in self.clients:
-            if c.interface == mci:
+            if c.mch == mch:
                 c.cleanup()
                 self.clients.remove(c)
                 break
         for h in self.hosts:
-            if h.interface == mci:
+            if h.mch == mch:
                 h.cleanup()
                 self.hosts.remove(h)
                 break
 
-        mci.cleanup()
-        self.mcis.remove(mci)
+        mch.cleanup()
+        self.mchs.remove(mch)
 
     def cleanup(self):
 
@@ -1019,12 +1023,12 @@ class NetworkAddressMonitor(object):
             c.teardown()
             c.cleanup()
 
-    def get_mci_by_address(self, family, address, interface):
+    def get_mch_by_address(self, family, address, interface):
         """
         Get the MCI for the address, its family and the interface.
         adress must be given as a string.
         """
-        for retval in self.mcis:
+        for retval in self.mchs:
             if retval.handles(family, address, interface):
                 return retval
 
@@ -1294,14 +1298,14 @@ def send_outstanding_messages(block=False):
     # delay between them are sent out without that delay.
     now = time.time()
     while len(send_queue) > 0 and (send_queue[-1][0] <= now or block):
-        interface = send_queue[-1][1]
+        mch = send_queue[-1][1]
         addr = send_queue[-1][2]
         msg = send_queue[-1][3]
         try:
-            interface.send_socket.sendto(msg, addr)
+            mch.send_socket.sendto(msg, addr)
         except Exception as e:
             logger.error('error while sending packet on {}: {}'.format(
-                interface.interface, e))
+                mch.interface.name, e))
 
         del send_queue[-1]
         if block and len(send_queue) > 0:
@@ -1417,7 +1421,7 @@ def main():
                 timeout = send_outstanding_messages()
                 events = s.select(timeout)
                 for key, mask in events:
-                    if isinstance(key.data, MulticastInterface):
+                    if isinstance(key.data, MulticastHandler):
                         key.data.handle_request(key)
                     else:
                         key.data.handle_request()
