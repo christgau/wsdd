@@ -22,7 +22,6 @@ import time
 import random
 import logging
 import platform
-import ctypes.util
 import collections
 import xml.etree.ElementTree as ElementTree
 import http
@@ -36,39 +35,15 @@ import grp
 import datetime
 
 
-# sockaddr C type, with a larger data field to capture IPv6 addresses
-# unfortunately, the structures differ on Linux and FreeBSD
-if platform.system() == 'Linux':
-    class sockaddr(ctypes.Structure):
-        _fields_ = [('family', ctypes.c_uint16),
-                    ('data', ctypes.c_uint8 * 24)]
-else:
-    class sockaddr(ctypes.Structure):
-        _fields_ = [('length', ctypes.c_uint8),
-                    ('family', ctypes.c_uint8),
-                    ('data', ctypes.c_uint8 * 24)]
-
-
-class if_addrs(ctypes.Structure):
-    pass
-
-
-if_addrs._fields_ = [('next', ctypes.POINTER(if_addrs)),
-                     ('name', ctypes.c_char_p),
-                     ('flags', ctypes.c_uint),
-                     ('addr', ctypes.POINTER(sockaddr)),
-                     ('netmask', ctypes.POINTER(sockaddr))]
-
-
 class MulticastInterface:
     """
     A class for handling multicast traffic on a given interface for a
     given address family. It provides multicast sender and receiver sockets
     """
-    def __init__(self, family, address, intf_name, selector):
+    def __init__(self, family, address, intf, selector):
         self.address = address
         self.family = family
-        self.name = intf_name
+        self.net_if = intf
         self.recv_socket = socket.socket(self.family, socket.SOCK_DGRAM)
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
@@ -85,17 +60,28 @@ class MulticastInterface:
             self.init_v6()
 
         logger.info('joined multicast group {0} on {2}%{1}'.format(
-            self.multicast_address, self.name, self.address))
+            self.multicast_address, self.net_if.name, self.address))
         logger.debug('transport address on {0} is {1}'.format(
-            self.name, self.transport_address))
+            self.net_if.name, self.transport_address))
         logger.debug('will listen for HTTP traffic on address {0}'.format(
             self.listen_address))
 
         self.selector.register(self.recv_socket, selectors.EVENT_READ, self)
         self.selector.register(self.send_socket, selectors.EVENT_READ, self)
 
+    def cleanup(self):
+        self.selector.unregister(self.recv_socket)
+        self.selector.unregister(self.send_socket)
+
+        self.recv_socket.close()
+        self.send_socket.close()
+
+    def handles(self, family, addr, interface):
+        return (self.family == family and self.address == addr and
+                self.net_if.name == interface.name)
+
     def init_v6(self):
-        idx = socket.if_nametoindex(self.name)
+        idx = socket.if_nametoindex(self.net_if.name)
         self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
 
         # v6: member_request = { multicast_addr, intf_idx }
@@ -125,7 +111,7 @@ class MulticastInterface:
         self.listen_address = (self.address, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self):
-        idx = socket.if_nametoindex(self.name)
+        idx = socket.if_nametoindex(self.net_if.name)
         self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
@@ -252,6 +238,9 @@ class WSDMessageHandler(object):
     def __init__(self):
         self.handlers = {}
 
+    def cleanup(self):
+        pass
+
     # shortcuts for building WSD responses
     def add_endpoint_reference(self, parent, endpoint=None):
         epr = ElementTree.SubElement(parent, 'wsa:EndpointReference')
@@ -343,7 +332,7 @@ class WSDMessageHandler(object):
 
         if interface:
             logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
-                src_address[0], src_address[1], interface.name,
+                src_address[0], src_address[1], interface.net_if.name,
                 action_method, msg_id
             ))
         else:
@@ -391,9 +380,6 @@ class WSDUDPMessageHandler(WSDMessageHandler):
 
         self.interface = interface
 
-    def startup(self):
-        pass
-
     def teardown(self):
         pass
 
@@ -408,7 +394,7 @@ class WSDUDPMessageHandler(WSDMessageHandler):
 
         if msg_type:
             logger.debug('scheduling {0} message via {1} to {2}'.format(
-                msg_type, self.interface.name, address))
+                msg_type, self.interface.net_if.name, address))
 
         msg_count = (
             MULTICAST_UDP_REPEAT
@@ -461,7 +447,7 @@ class WSDDiscoveredDevice(object):
         self.last_seen = time.time()
         logger.info('discovered {} in {} on {}%{}'.format(
             self.props['DisplayName'], self.props['BelongsTo'], addr,
-            interface.name))
+            interface.net_if.name))
         logger.debug(str(self.props))
 
     def extract_wsdp_props(self, root, target_dict, dialect):
@@ -501,6 +487,14 @@ class WSDClient(WSDUDPMessageHandler):
         self.handlers[WSD_PROBE_MATCH] = self.handle_probe_match
         self.handlers[WSD_RESOLVE_MATCH] = self.handle_resolve_match
 
+        # avoid packet storm when hosts come up by delaying initial probe
+        time.sleep(random.randint(0, MAX_STARTUP_PROBE_DELAY))
+        self.send_probe()
+
+    def cleanup(self):
+        self.interface.remove_handler(self.interface.send_socket, self)
+        self.interface.remove_handler(self.interface.recv_socket, self)
+
     def send_probe(self):
         """WS-Discovery, Section 4.3, Probe message"""
         self.remove_outdated_probes()
@@ -511,11 +505,6 @@ class WSDClient(WSDUDPMessageHandler):
         xml, i = self.build_message_tree(WSA_DISCOVERY, WSD_PROBE, None, probe)
         self.enqueue_datagram(self.xml_to_buffer(xml), msg_type='Probe')
         self.probes[i] = time.time()
-
-    def startup(self):
-        # avoid packet storm when hosts come up by delaying initial probe
-        time.sleep(random.randint(0, MAX_STARTUP_PROBE_DELAY))
-        self.send_probe()
 
     def teardown(self):
         self.remove_outdated_probes()
@@ -598,7 +587,7 @@ class WSDClient(WSDUDPMessageHandler):
         url = xaddr
         if self.interface.family == socket.AF_INET6:
             host = '[{}]'.format(url.partition('[')[2].partition(']')[0])
-            url = url.replace(']', '%{}]'.format(self.interface.name))
+            url = url.replace(']', '%{}]'.format(self.interface.net_if.name))
 
         body = self.build_getmetadata_message(endpoint)
         request = urllib.request.Request(url, data=body, method='POST')
@@ -654,7 +643,6 @@ class WSDHost(WSDUDPMessageHandler):
         self.handlers[WSD_PROBE] = self.handle_probe
         self.handlers[WSD_RESOLVE] = self.handle_resolve
 
-    def startup(self):
         self.send_hello()
 
     def teardown(self):
@@ -720,7 +708,7 @@ class WSDHost(WSDUDPMessageHandler):
             return None, None
 
         if not addr.text == args.uuid.urn:
-            logger.debug(
+            logger.warn(
                 'invalid resolve request: address ({}) does not '
                 'match own one ({})'.format(addr.text, args.uuid.urn))
             return None, None
@@ -729,7 +717,7 @@ class WSDHost(WSDUDPMessageHandler):
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
         self.add_endpoint_reference(match)
         self.add_types(match)
-        self.add_xaddr(match, addr)
+        self.add_xaddr(match, self.interface.transport_address)
         self.add_metadata_version(match)
 
         return matches, WSD_RESOLVE_MATCH
@@ -863,7 +851,7 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
 
     def get_clients_by_interface(self, interface):
         return [c for c in self.server.wsd_clients if
-                c.interface.name == interface or not interface]
+                c.interface.net_if.name == interface or not interface]
 
     def get_list_reply(self):
         retval = ''
@@ -871,7 +859,7 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
             dev = self.server.wsd_known_devices[dev_uuid]
             addrs_str = []
             for mci, addrs in dev.addresses.items():
-                addrs_str.append(', '.join(['{}%{}'.format(a, mci.name)
+                addrs_str.append(', '.join(['{}%{}'.format(a, mci.net_if.name)
                                  for a in addrs]))
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
@@ -905,49 +893,274 @@ class ApiServer(object):
         selector.register(s.fileno(), selectors.EVENT_READ, s)
 
 
-def enumerate_host_interfaces():
-    """Get all addresses of all installed interfaces except loopbacks"""
-    libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
-    addr = ctypes.POINTER(if_addrs)()
-    retval = libc.getifaddrs(ctypes.byref(addr))
-    if retval:
-        raise OSError(ctypes.get_errno())
+class NetworkInterface(object):
 
-    IFF_LOOPBACK = 0x8  # common value for Linux, Free/OpenBSD
+    def __init__(self, name, scope):
+        self.name = name
+        self.scope = scope
 
-    addrs = []
-    ptr = addr
-    while ptr:
-        deref = ptr[0]
-        family = deref.addr[0].family if deref.addr else None
-        dev_name = deref.name.decode()
-        if deref.flags & IFF_LOOPBACK != 0:
-            logger.debug('ignoring loop-back interface {}'.format(dev_name))
-        elif family == socket.AF_INET:
-            addrs.append((
-                dev_name, family,
-                socket.inet_ntop(family, bytes(deref.addr[0].data[2:6]))))
-        elif family == socket.AF_INET6:
-            if bytes(deref.addr[0].data[6:8]) == b'\xfe\x80':
-                addrs.append((
-                    dev_name, family,
-                    socket.inet_ntop(family, bytes(deref.addr[0].data[6:22]))))
 
-        ptr = deref.next
+class NetworkAddressMonitor(object):
+    """
+    Observes changes of network addresses, handles addition and removal of
+    network addresses, and filters for addresses/interfaces that are or are not
+    handled. The actual OS-specific implementation that detects the changes is
+    done in subclasses.
+    """
 
-    libc.freeifaddrs(addr)
+    def __init__(self, selector):
+        self.interfaces = {}
+        self.selector = selector
 
-    # filter detected addresses by command line arguments,
-    if args.ipv4only:
-        addrs = [x for x in addrs if x[1] == socket.AF_INET]
+        self.clients = []
+        self.hosts = []
+        self.mcis = []
+        self.known_devices = {}
 
-    if args.ipv6only:
-        addrs = [x for x in addrs if x[1] == socket.AF_INET6]
+        self.enumerate()
 
-    if args.interface:
-        addrs = [x for x in addrs if x[0] in args.interface]
+    def enumerate(self):
+        pass
 
-    return addrs
+    def handle_request(self):
+        """ handle network change message """
+        pass
+
+    def is_address_handled(self, addr, addr_family, interface):
+        """
+        Check if we should handle that address.
+        Address must be provided as raw address, i.e. byte array
+        """
+        if args.ipv4only and addr_family == socket.AF_INET6:
+            return False
+        if args.ipv6only and addr_family == socket.AF_INET:
+            return False
+
+        # Nah, this check is not optimal but there are no local flags for
+        # addresses, but it should be safe for IPv4 anyways
+        # (https://tools.ietf.org/html/rfc5735#page-3)
+        if (addr_family == socket.AF_INET) and (addr[0] == 127):
+            logger.debug('ignoring loop-back address on {}'.format(
+                interface.name))
+            return False
+        if (addr_family == socket.AF_INET6) and (addr[0:2] != b'\xfe\x80'):
+            return False
+
+        if args.interface and interface.name not in args.interface:
+            return False
+
+        return True
+
+    def handle_new_address(self, raw_addr, addr_family, interface):
+        addr = socket.inet_ntop(addr_family, raw_addr)
+        logger.debug('new address: {} on {}'.format(addr, interface.name))
+
+        if not self.is_address_handled(raw_addr, addr_family, interface):
+            return
+
+        # filter out what is not wanted
+        # Ignore addresses or interfaces we already handle. There can only be
+        # one multicast handler per address family and network interface
+        # However, multiple link-local addresses can be
+        for mci in self.mcis:
+            if mci.handles(addr_family, addr, interface):
+                return
+
+        logger.debug('handling traffic for {} on {} now'.format(
+            addr, interface.name))
+        mci = MulticastInterface(addr_family, addr, interface, self.selector)
+        self.mcis.append(mci)
+
+        if not args.no_host:
+            h = WSDHost(mci)
+            self.hosts.append(h)
+            if not args.no_http:
+                WSDHttpServer(mci.listen_address, WSDHttpRequestHandler,
+                              mci.family, self.selector)
+
+        if args.discovery:
+            client = WSDClient(mci, self.known_devices)
+            self.clients.append(client)
+
+    def handle_deleted_address(self, raw_addr, addr_family, interface):
+        addr = socket.inet_ntop(addr_family, raw_addr)
+        logger.debug('deleted address {} on {}'.format(addr, interface.name))
+
+        if not self.is_address_handled(addr_family, raw_addr, interface):
+            return
+
+        mci = self.get_mci_by_address(addr_family, addr, interface)
+        if mci is None:
+            return
+
+        # Do not tear the client/hosts down. Saying goodbye does not work
+        # because the address is already gone.
+        for c in self.clients:
+            if c.interface == mci:
+                c.cleanup()
+                self.clients.remove(c)
+                break
+        for h in self.hosts:
+            if h.interface == mci:
+                h.cleanup()
+                self.hosts.remove(h)
+                break
+
+        mci.cleanup()
+        self.mcis.remove(mci)
+
+    def cleanup(self):
+
+        for h in self.hosts:
+            h.teardown()
+            h.cleanup()
+
+        for c in self.clients:
+            c.teardown()
+            c.cleanup()
+
+    def get_mci_by_address(self, family, address, interface):
+        """
+        Get the MCI for the address, its family and the interface.
+        adress must be given as a string.
+        """
+        for retval in self.mcis:
+            if retval.handles(family, address, interface):
+                return retval
+
+        return None
+
+
+# from rtnetlink.h
+RTMGRP_LINK = 1
+RTMGRP_IPV4_IFADDR = 0x10
+RTMGRP_IPV6_IFADDR = 0x100
+
+RTM_NEWADDR = 20
+RTM_DELADDR = 21
+RTM_GETADDR = 22
+
+# from netlink.h
+NLM_HDR_LEN = 16
+
+NLM_F_REQUEST = 0x01
+NLM_F_ROOT = 0x100
+NLM_F_MATCH = 0x200
+NLM_F_DUMP = NLM_F_ROOT | NLM_F_MATCH
+
+# self defines
+NLM_HDR_LEN = 16
+NLM_HDR_ALIGNTO = 4
+
+# ifa flags
+IFA_F_DADFAILED = 0x08
+IFA_F_HOMEADDRESS = 0x10
+IFA_F_DEPRECATED = 0x20
+IFA_F_TENTATIVE = 0x40
+
+# from if_addr.h
+IFA_ADDRESS = 1
+IFA_LOCAL = 2
+IFA_LABEL = 3
+IFA_FLAGS = 8
+IFA_MSG_LEN = 8
+
+RTA_ALIGNTO = 4
+
+
+class NetlinkAddressMonitor(NetworkAddressMonitor):
+    """
+    Implementation of the AddressMonitor for Netlink sockets, i.e. Linux
+    """
+
+    def enumerate(self):
+        super().enumerate()
+
+        rtm_groups = RTMGRP_LINK
+        if not args.ipv4only:
+            rtm_groups = rtm_groups | RTMGRP_IPV6_IFADDR
+        if not args.ipv6only:
+            rtm_groups = rtm_groups | RTMGRP_IPV4_IFADDR
+        if args.ipv4only and args.ipv6only:
+            return
+
+        self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW,
+                                    socket.NETLINK_ROUTE)
+        self.socket.bind((os.getpid(), rtm_groups))
+        kernel = (0, 0)
+
+        req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, RTM_GETADDR,
+                          NLM_F_REQUEST | NLM_F_DUMP, 1, os.getpid(),
+                          socket.AF_PACKET)
+        self.selector.register(self.socket, selectors.EVENT_READ, self)
+        self.socket.sendto(req, kernel)
+
+    def handle_request(self):
+        super().handle_request()
+
+        buf, src = self.socket.recvfrom(4096)
+        logger.debug('netlink message with {} bytes'.format(len(buf)))
+
+        offset = 0
+        while offset < len(buf):
+            h_len, h_type, _, _, _ = struct.unpack_from('@IHHII', buf, offset)
+
+            msg_len = h_len - NLM_HDR_LEN
+            if msg_len < 0:
+                break
+
+            if h_type != RTM_NEWADDR and h_type != RTM_DELADDR:
+                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                continue
+
+            offset += NLM_HDR_LEN
+            # decode ifaddrmsg as in rtnetlink.h
+            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(
+                '@BBBBI', buf, offset)
+            if (ifa_flags & IFA_F_DADFAILED or ifa_flags & IFA_F_HOMEADDRESS or
+               ifa_flags & IFA_F_DEPRECATED or ifa_flags & IFA_F_TENTATIVE):
+                logger.warn('ignore address with invalid state {}'.format(
+                    hex(ifa_flags)))
+                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                continue
+
+            addr = None
+            i = offset + IFA_MSG_LEN
+            while i - offset < msg_len:
+                attr_len, attr_type = struct.unpack_from('HH', buf, i)
+                if attr_type == IFA_LABEL:
+                    name, = struct.unpack_from(str(attr_len - 4 - 1) + 's',
+                                               buf, i + 4)
+                    name = name.decode()
+                    if ifa_idx in self.interfaces:
+                        self.interfaces[ifa_idx].name = name
+                    else:
+                        self.interfaces[ifa_idx] = NetworkInterface(
+                            name, ifa_scope)
+                elif attr_type == IFA_LOCAL and ifa_family == socket.AF_INET:
+                    addr = buf[i + 4:i + 4 + 4]
+                elif (attr_type == IFA_ADDRESS and
+                        ifa_family == socket.AF_INET6):
+                    addr = buf[i + 4:i + 4 + 16]
+                elif attr_type == IFA_FLAGS:
+                    _, ifa_flags = struct.unpack_from('HI', buf, i)
+                i += ((attr_len + 1) // RTA_ALIGNTO) * RTA_ALIGNTO
+
+            if addr is None:
+                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                continue
+
+            iface = self.interfaces[ifa_idx]
+            if h_type == RTM_NEWADDR:
+                self.handle_new_address(addr, ifa_family, iface)
+            elif h_type == RTM_DELADDR:
+                self.handle_deleted_address(addr, ifa_family, iface)
+
+            offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+
+    def cleanup(self):
+        self.selector.unregister(self.socket)
+        super().cleanup()
 
 
 def sigterm_handler(signum, frame):
@@ -1157,35 +1370,7 @@ def drop_privileges(uid, gid):
 
 
 def main():
-    """
-    Multicast handling: send Hello message on startup, receive from multicast
-    sockets and handle the messages, and emit Bye message when process gets
-    terminated by signal
-    """
     parse_args()
-
-    addresses = enumerate_host_interfaces()
-    if not addresses:
-        logger.error("No multicast addresses available. Exiting.")
-        return 1
-
-    s = selectors.DefaultSelector()
-    handlers = []
-    clients = []
-    known_devices = {}
-
-    for address in addresses:
-        interface = MulticastInterface(address[1], address[2], address[0], s)
-
-        if not args.no_host:
-            handlers.append(WSDHost(interface))
-            if not args.no_http:
-                WSDHttpServer(interface.listen_address, WSDHttpRequestHandler,
-                              interface.family, s)
-
-        if args.discovery:
-            clients.append(WSDClient(interface, known_devices))
-            handlers.append(clients[-1])
 
     if not args.discovery and args.listen:
         logger.warning('Listen option ignored since discovery is disabled.')
@@ -1194,8 +1379,18 @@ def main():
                        'Falling back to port {}'.format(WSDD_LISTEN_PORT))
         args.listen = WSDD_LISTEN_PORT
 
+    if args.ipv4only and args.ipv4only:
+        logger.error('Listening to no IP address family.')
+        return 4
+
+    s = selectors.DefaultSelector()
+    if platform.system() == 'Linux':
+        nm = NetlinkAddressMonitor(s)
+    else:
+        raise NotImplementedError('unsupported OS')
+
     if args.listen:
-        ApiServer(s, args.listen, clients, known_devices)
+        ApiServer(s, args.listen, nm.clients, nm.known_devices)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:
@@ -1217,10 +1412,6 @@ def main():
     # main loop, serve requests coming from any outbound socket
     signal.signal(signal.SIGTERM, sigterm_handler)
     try:
-        # say hello or probe network for other hosts
-        for h in handlers:
-            h.startup()
-
         while True:
             try:
                 timeout = send_outstanding_messages()
@@ -1239,9 +1430,7 @@ def main():
     finally:
         logger.info('shutting down gracefully...')
 
-    # say goodbye
-    for h in handlers:
-        h.teardown()
+    nm.cleanup()
 
     send_outstanding_messages(True)
     logger.info('Done.')
