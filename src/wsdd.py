@@ -22,6 +22,7 @@ import time
 import random
 import logging
 import platform
+import ctypes.util
 import collections
 import xml.etree.ElementTree as ElementTree
 import http
@@ -786,14 +787,16 @@ class WSDHttpMessageHandler(WSDMessageHandler):
 class WSDHttpServer(http.server.HTTPServer):
     """ HTTP server both with IPv6 support and WSD handling """
 
-    def __init__(self, server_address, RequestHandlerClass, addr_family, sel):
+    def __init__(self, mch, RequestHandlerClass, addr_family, sel):
         if addr_family == socket.AF_INET6:
             type(self).address_family = addr_family
 
+        self.mch = mch
         self.selector = sel
         self.wsd_handler = WSDHttpMessageHandler()
+        self.registered = False
 
-        super().__init__(server_address, RequestHandlerClass)
+        super().__init__(mch.listen_address, RequestHandlerClass)
 
     def server_bind(self):
         if type(self).address_family == socket.AF_INET6:
@@ -801,6 +804,12 @@ class WSDHttpServer(http.server.HTTPServer):
 
         super().server_bind()
         self.selector.register(self.fileno(), selectors.EVENT_READ, self)
+        self.registered = True
+
+    def server_close(self):
+        if self.registered:
+            self.selector.unregister(self.fileno())
+        super().server_close()
 
 
 class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -904,7 +913,15 @@ class NetworkInterface(object):
         self.scope = scope
 
 
-class NetworkAddressMonitor(object):
+class MetaEnumAfterInit(type):
+
+    def __call__(cls, *args, **kwargs):
+        obj = super().__call__(*args, **kwargs)
+        obj.enumerate()
+        return obj
+
+
+class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
     """
     Observes changes of network addresses, handles addition and removal of
     network addresses, and filters for addresses/interfaces that are or are not
@@ -919,16 +936,27 @@ class NetworkAddressMonitor(object):
         self.clients = []
         self.hosts = []
         self.mchs = []
+        self.http_servers = []
         self.known_devices = {}
 
-        self.enumerate()
-
     def enumerate(self):
+        """
+        Performs an initial enumeration of addresses and sets up everything
+        for observing future changes.
+        """
         pass
 
     def handle_request(self):
         """ handle network change message """
         pass
+
+    def add_interface(self, name, idx, scope):
+        if idx in self.interfaces:
+            self.interfaces[idx].name = name
+        else:
+            self.interfaces[idx] = NetworkInterface(name, scope)
+
+        return self.interfaces[idx]
 
     def is_address_handled(self, addr, addr_family, interface):
         """
@@ -957,7 +985,7 @@ class NetworkAddressMonitor(object):
 
     def handle_new_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.debug('new address: {} on {}'.format(addr, interface.name))
+        logger.warn('new address: {} on {}'.format(addr, interface.name))
 
         if not self.is_address_handled(raw_addr, addr_family, interface):
             return
@@ -979,8 +1007,8 @@ class NetworkAddressMonitor(object):
             h = WSDHost(mch)
             self.hosts.append(h)
             if not args.no_http:
-                WSDHttpServer(mch.listen_address, WSDHttpRequestHandler,
-                              mch.family, self.selector)
+                self.http_servers.append(WSDHttpServer(
+                    mch, WSDHttpRequestHandler, mch.family, self.selector))
 
         if args.discovery:
             client = WSDClient(mch, self.known_devices)
@@ -988,7 +1016,7 @@ class NetworkAddressMonitor(object):
 
     def handle_deleted_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.debug('deleted address {} on {}'.format(addr, interface.name))
+        logger.warn('deleted address {} on {}'.format(addr, interface.name))
 
         if not self.is_address_handled(addr_family, raw_addr, interface):
             return
@@ -998,7 +1026,7 @@ class NetworkAddressMonitor(object):
             return
 
         # Do not tear the client/hosts down. Saying goodbye does not work
-        # because the address is already gone.
+        # because the address is already gone (at least on Linux).
         for c in self.clients:
             if c.mch == mch:
                 c.cleanup()
@@ -1009,6 +1037,10 @@ class NetworkAddressMonitor(object):
                 h.cleanup()
                 self.hosts.remove(h)
                 break
+        for s in self.http_servers:
+            if s.mch == mch:
+                s.server_close()
+                self.http_servers.remove(s)
 
         mch.cleanup()
         self.mchs.remove(mch)
@@ -1039,10 +1071,6 @@ class NetworkAddressMonitor(object):
 RTMGRP_LINK = 1
 RTMGRP_IPV4_IFADDR = 0x10
 RTMGRP_IPV6_IFADDR = 0x100
-
-RTM_NEWADDR = 20
-RTM_DELADDR = 21
-RTM_GETADDR = 22
 
 # from netlink.h
 NLM_HDR_LEN = 16
@@ -1077,26 +1105,31 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
     Implementation of the AddressMonitor for Netlink sockets, i.e. Linux
     """
 
-    def enumerate(self):
-        super().enumerate()
+    RTM_NEWADDR = 20
+    RTM_DELADDR = 21
+    RTM_GETADDR = 22
+
+    def __init__(self, selector):
+        super().__init__(selector)
 
         rtm_groups = RTMGRP_LINK
         if not args.ipv4only:
             rtm_groups = rtm_groups | RTMGRP_IPV6_IFADDR
         if not args.ipv6only:
             rtm_groups = rtm_groups | RTMGRP_IPV4_IFADDR
-        if args.ipv4only and args.ipv6only:
-            return
 
         self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW,
                                     socket.NETLINK_ROUTE)
         self.socket.bind((os.getpid(), rtm_groups))
-        kernel = (0, 0)
+        self.selector.register(self.socket, selectors.EVENT_READ, self)
 
-        req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, RTM_GETADDR,
+    def enumerate(self):
+        super().enumerate()
+
+        kernel = (0, 0)
+        req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, self.RTM_GETADDR,
                           NLM_F_REQUEST | NLM_F_DUMP, 1, os.getpid(),
                           socket.AF_PACKET)
-        self.selector.register(self.socket, selectors.EVENT_READ, self)
         self.socket.sendto(req, kernel)
 
     def handle_request(self):
@@ -1113,7 +1146,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
             if msg_len < 0:
                 break
 
-            if h_type != RTM_NEWADDR and h_type != RTM_DELADDR:
+            if h_type != self.RTM_NEWADDR and h_type != self.RTM_DELADDR:
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue
 
@@ -1135,12 +1168,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 if attr_type == IFA_LABEL:
                     name, = struct.unpack_from(str(attr_len - 4 - 1) + 's',
                                                buf, i + 4)
-                    name = name.decode()
-                    if ifa_idx in self.interfaces:
-                        self.interfaces[ifa_idx].name = name
-                    else:
-                        self.interfaces[ifa_idx] = NetworkInterface(
-                            name, ifa_scope)
+                    self.add_interface(name.decode(), ifa_idx, ifa_scope)
                 elif attr_type == IFA_LOCAL and ifa_family == socket.AF_INET:
                     addr = buf[i + 4:i + 4 + 4]
                 elif (attr_type == IFA_ADDRESS and
@@ -1155,15 +1183,171 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 continue
 
             iface = self.interfaces[ifa_idx]
-            if h_type == RTM_NEWADDR:
+            if h_type == self.RTM_NEWADDR:
                 self.handle_new_address(addr, ifa_family, iface)
-            elif h_type == RTM_DELADDR:
+            elif h_type == self.RTM_DELADDR:
                 self.handle_deleted_address(addr, ifa_family, iface)
 
             offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
 
     def cleanup(self):
         self.selector.unregister(self.socket)
+        self.socket.close()
+        super().cleanup()
+
+
+# from sys/net/route.h
+RTA_IFA = 0x20
+
+# from sys/socket.h
+CTL_NET = 4
+NET_RT_IFLIST = 3
+
+# from sys/net/if.h
+IFF_LOOPBACK = 0x8
+IFF_MULTICAST = 0x800
+
+# sys/netinet6/in6_var.h
+IN6_IFF_TENTATIVE = 0x02
+IN6_IFF_DUPLICATED = 0x04
+IN6_IFF_NOTREADY = IN6_IFF_TENTATIVE | IN6_IFF_DUPLICATED
+
+SA_ALIGNTO = ctypes.sizeof(ctypes.c_long)
+
+
+class RouteSocketAddressMonitor(NetworkAddressMonitor):
+    """
+    Implementation of the AddressMonitor for FreeBSD using route sockets
+    """
+
+    # from sys/net/route.h
+    RTM_NEWADDR = 0xC
+    RTM_DELADDR = 0xD
+    RTM_IFINFO = 0xE
+
+    def __init__(self, selector):
+        super().__init__(selector)
+        self.intf_blacklist = []
+
+        # Create routing socket to get notified about future changes.
+        # Do this before fetching the current routing information to avoid
+        # race condition.
+        self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW,
+                                    socket.AF_UNSPEC)
+        self.selector.register(self.socket, selectors.EVENT_READ, self)
+
+    def enumerate(self):
+        super().enumerate()
+        mib = [CTL_NET, socket.AF_ROUTE, 0, 0, NET_RT_IFLIST, 0]
+        rt_mib = (ctypes.c_int * len(mib))()
+        rt_mib[:] = mib[:]
+
+        libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+
+        # Ask kernel for routing table size first.
+        rt_size = ctypes.c_size_t()
+        if libc.sysctl(ctypes.byref(rt_mib), ctypes.c_size_t(len(rt_mib)), 0,
+                       ctypes.byref(rt_size), 0, 0):
+            raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+
+        # Get the initial routing (interface list) data.
+        rt_buf = ctypes.create_string_buffer(rt_size.value)
+        if libc.sysctl(ctypes.byref(rt_mib), ctypes.c_size_t(len(rt_mib)),
+                       rt_buf, ctypes.byref(rt_size), 0, 0):
+            raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+
+        self.parse_route_socket_response(rt_buf.raw, True)
+
+    def handle_request(self):
+        super().handle_request()
+
+        self.parse_route_socket_response(self.socket.recv(4096), False)
+
+    def parse_route_socket_response(self, buf, keep_intf):
+        offset = 0
+
+        intf = None
+        intf_flags = 0
+        while offset < len(buf):
+            rtm_len, _, rtm_type = struct.unpack_from('@HBB', buf, offset)
+            # addr_mask has same offset in if_msghdr and ifs_msghdr
+            addr_mask, flags = struct.unpack_from('ii', buf, offset + 4)
+
+            msg_types = [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]
+            if rtm_type not in msg_types:
+                offset += rtm_len
+                continue
+
+            if rtm_type == self.RTM_IFINFO:
+                intf_flags = flags
+
+            # those offset may unfortunately be architecture dependent
+            sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO
+                                  else 20)
+
+            # For a route socket message, and different to a sysctl response,
+            # the link info is stored inside the same rtm message, so it has to
+            # survive multiple rtm messages in such cases
+            if not keep_intf:
+                intf = None
+
+            new_intf = self.parse_addrs(buf, sa_offset, offset + rtm_len,
+                                        intf, addr_mask, rtm_type, intf_flags)
+            intf = new_intf if new_intf else intf
+
+            offset += rtm_len
+
+    def parse_addrs(self, buf, offset, limit, intf, addr_mask, rtm_type,
+                    flags):
+        addr_type_idx = 1
+        addr = None
+        addr_family = None
+        while offset < limit:
+            while (not (addr_type_idx & addr_mask) and
+                    (addr_type_idx <= addr_mask)):
+                addr_type_idx = addr_type_idx << 1
+
+            sa_len, sa_fam = struct.unpack_from('@BB', buf, offset)
+            if (sa_fam in [socket.AF_INET, socket.AF_INET6] and
+                    addr_type_idx == RTA_IFA):
+                addr_family = sa_fam
+                addr_offset = 4 if sa_fam == socket.AF_INET else 8
+                addr_length = 16 if sa_fam == socket.AF_INET6 else 4
+                addr_start = offset + addr_offset
+                addr = buf[addr_start:addr_start + addr_length]
+            elif sa_fam == socket.AF_LINK:
+                idx, _, name_len = struct.unpack_from('@HBB', buf, offset + 2)
+                if idx > 0:
+                    off_name = offset + 8
+                    if_name = (buf[off_name:off_name + name_len]).decode()
+                    intf = self.add_interface(if_name, idx, idx)
+
+            offset += (((sa_len + SA_ALIGNTO - 1) // SA_ALIGNTO) * SA_ALIGNTO
+                       if sa_len > 0 else SA_ALIGNTO)
+            addr_type_idx = addr_type_idx << 1
+
+        if rtm_type == self.RTM_IFINFO and intf is not None:
+            if flags & IFF_LOOPBACK or not flags & IFF_MULTICAST:
+                self.intf_blacklist.append(intf.name)
+            elif intf in self.intf_blacklist:
+                self.intf_blacklist.remove(intf.name)
+
+        if intf is None or intf.name in self.intf_blacklist or addr is None:
+            return intf
+
+        if rtm_type == self.RTM_DELADDR:
+            self.handle_deleted_address(addr, addr_family, intf)
+        else:
+            # Too bad, the address may be unuseable (tentative, e.g.) here
+            # but we won't get any further notifcation about the address being
+            # available for use. Thus, we try and may fail here
+            self.handle_new_address(addr, addr_family, intf)
+
+        return intf
+
+    def cleanup(self):
+        self.selector.unregister(self.socket)
+        self.socket.close()
         super().cleanup()
 
 
@@ -1390,6 +1574,8 @@ def main():
     s = selectors.DefaultSelector()
     if platform.system() == 'Linux':
         nm = NetlinkAddressMonitor(s)
+    elif platform.system() == 'FreeBSD':
+        nm = RouteSocketAddressMonitor(s)
     else:
         raise NotImplementedError('unsupported OS')
 
