@@ -36,6 +36,7 @@ NLM_HDR_ALIGNTO = 4
 
 IFA_MSG_LEN = 8
 
+# hardcoded as 4 in rtnetlink.h
 RTA_ALIGNTO = 4
 
 s = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
