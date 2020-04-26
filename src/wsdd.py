@@ -963,9 +963,9 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
         Check if we should handle that address.
         Address must be provided as raw address, i.e. byte array
         """
-        if args.ipv4only and addr_family == socket.AF_INET6:
+        if args.ipv4only and addr_family != socket.AF_INET:
             return False
-        if args.ipv6only and addr_family == socket.AF_INET:
+        if args.ipv6only and addr_family != socket.AF_INET6:
             return False
 
         # Nah, this check is not optimal but there are no local flags for
