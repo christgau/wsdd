@@ -1567,7 +1567,7 @@ def main():
                        'Falling back to port {}'.format(WSDD_LISTEN_PORT))
         args.listen = WSDD_LISTEN_PORT
 
-    if args.ipv4only and args.ipv4only:
+    if args.ipv4only and args.ipv6only:
         logger.error('Listening to no IP address family.')
         return 4
 
