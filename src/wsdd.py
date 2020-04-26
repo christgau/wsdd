@@ -972,8 +972,6 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
         # addresses, but it should be safe for IPv4 anyways
         # (https://tools.ietf.org/html/rfc5735#page-3)
         if (addr_family == socket.AF_INET) and (addr[0] == 127):
-            logger.debug('ignoring loop-back address on {}'.format(
-                interface.name))
             return False
         if (addr_family == socket.AF_INET6) and (addr[0:2] != b'\xfe\x80'):
             return False
@@ -985,9 +983,10 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
 
     def handle_new_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.warn('new address: {} on {}'.format(addr, interface.name))
+        logger.warn('new address {} on {}'.format(addr, interface.name))
 
         if not self.is_address_handled(raw_addr, addr_family, interface):
+            logger.warn('ignoring address on {}'.format(interface.name))
             return
 
         # filter out what is not wanted
@@ -1147,6 +1146,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 break
 
             if h_type != self.RTM_NEWADDR and h_type != self.RTM_DELADDR:
+                logger.debug('invalid rtm_message type {}'.format(h_type))
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue
 
@@ -1177,8 +1177,10 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 elif attr_type == IFA_FLAGS:
                     _, ifa_flags = struct.unpack_from('HI', buf, i)
                 i += ((attr_len + 1) // RTA_ALIGNTO) * RTA_ALIGNTO
+                logger.debug('rt_attr {} {}'.format(attr_len, attr_type))
 
             if addr is None:
+                logger.debug('not address in RTM message')
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue
 
