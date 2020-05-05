@@ -4,19 +4,19 @@ Description=Web Services Dynamic Discovery host daemon
 After=network-online.target
 Wants=network-online.target
 ; It makes sense to have Samba running when wsdd starts, but is not required
-;Wants=smb.service
+;Wants=smbd.service
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/wsdd --shortlog
 ; Replace those with an unprivledged user/group that matches your environment,
-; like nobody/nogroup or daemon:daemon or a dedicated user for wsdd
+; like nobody/nogroup or daemon/daemon or a dedicated user for wsdd
 User=nobody
-Group=nobody
+Group=nogroup
 ; The following lines can be used for a chroot execution of wsdd.
 ; Also append '--chroot /run/wsdd/chroot' to ExecStart to enable chrooting
 ;AmbientCapabilities=CAP_SYS_CHROOT
-;ExecStartPre=/usr/bin/install -d -o nobody -g nobody -m 0700 /run/wsdd/chroot
+;ExecStartPre=/usr/bin/install -d -o nobody -g nogroup -m 0700 /run/wsdd/chroot
 ;ExecStopPost=rmdir /run/wsdd/chroot
 
 [Install]
