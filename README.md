@@ -58,7 +58,7 @@ actual distribution/installation where they are to be used.
 
 Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
 IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
-multicast address (`fe02::c`) is used.
+multicast address (`ff02::c`) is used.
 
 Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
 allowed.
