@@ -976,7 +976,10 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
         if (addr_family == socket.AF_INET6) and (addr[0:2] != b'\xfe\x80'):
             return False
 
-        if args.interface and interface.name not in args.interface:
+        addr_str = socket.inet_ntop(addr_family, addr)
+
+        if (args.interface) and (interface.name not in args.interface) and (
+                addr_str not in args.interface):
             return False
 
         return True
@@ -1367,7 +1370,7 @@ def parse_args():
 
     parser.add_argument(
         '-i', '--interface',
-        help='interface address to use',
+        help='interface or address to use',
         action='append', default=[])
     parser.add_argument(
         '-H', '--hoplimit',
