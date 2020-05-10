@@ -139,14 +139,17 @@ below for details.
      Set the hop limit for multicast packets. The default is 1 which should
      prevent packets from leaving the local network segment.
 
- * `-i INTERFACE`, `--interface INTERFACE`
+ * `-i INTERFACE/ADDRESS`, `--interface INTERFACE/ADDRESS`
 
      Specify on which interfaces wsdd will be listening on. If no interfaces are
      specified, all interfaces are used. The loop-back interface is never used,
      even when it was explicitly specified. For interfaces with IPv6 addresses,
      only link-local addresses will be used for announcing the host on the
      network. This option can be provided multiple times in order to use more
-     than interface (but no all).
+     than one interface.
+
+     This option also accepts IP addresses that the service should bind to.
+     For IPv6, only link local addresses are actually considered as noted above.
 
  * `-s`, `--shortlog`
 
