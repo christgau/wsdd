@@ -986,10 +986,10 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
 
     def handle_new_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.warn('new address {} on {}'.format(addr, interface.name))
+        logger.debug('new address {} on {}'.format(addr, interface.name))
 
         if not self.is_address_handled(raw_addr, addr_family, interface):
-            logger.warn('ignoring address on {}'.format(interface.name))
+            logger.debug('ignoring that address on {}'.format(interface.name))
             return
 
         # filter out what is not wanted
@@ -1000,7 +1000,7 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
             if mch.handles(addr_family, addr, interface):
                 return
 
-        logger.debug('handling traffic for {} on {} now'.format(
+        logger.debug('handling traffic for {} on {}'.format(
             addr, interface.name))
         mch = MulticastHandler(addr_family, addr, interface, self.selector)
         self.mchs.append(mch)
