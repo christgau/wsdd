@@ -713,10 +713,10 @@ class WSDHost(WSDUDPMessageHandler):
             return None, None
 
         if not addr.text == args.uuid.urn:
-            logger.warn(
+            logger.warning(
                 'invalid resolve request: address ({}) does not '
                 'match own one ({})'.format(addr.text, args.uuid.urn))
-            return None, None
+            return None
 
         matches = ElementTree.Element('wsd:ResolveMatches')
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
