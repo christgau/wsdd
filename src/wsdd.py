@@ -1518,6 +1518,9 @@ def chroot(root):
     """
     Chroot into a separate directory to isolate ourself for increased security.
     """
+    # preload for socket.gethostbyaddr()
+    import encodings.idna
+
     try:
         os.chroot(root)
         os.chdir('/')
