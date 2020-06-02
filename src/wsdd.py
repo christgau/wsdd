@@ -1100,6 +1100,7 @@ IFA_FLAGS = 8
 IFA_MSG_LEN = 8
 
 RTA_ALIGNTO = 4
+RTA_LEN = 4
 
 
 class NetlinkAddressMonitor(NetworkAddressMonitor):
@@ -1168,6 +1169,10 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
             i = offset + IFA_MSG_LEN
             while i - offset < msg_len:
                 attr_len, attr_type = struct.unpack_from('HH', buf, i)
+
+                if attr_len < RTA_LEN:
+                    break
+
                 if attr_type == IFA_LABEL:
                     name, = struct.unpack_from(str(attr_len - 4 - 1) + 's',
                                                buf, i + 4)
