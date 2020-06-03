@@ -685,17 +685,17 @@ class WSDHost(WSDUDPMessageHandler):
         if scopes:
             # THINK: send fault message (see p. 21 in WSD)
             logger.warning('scopes ({}) unsupported but probed'.format(scopes))
-            return None, None
+            return None
 
         types_elem = probe.find('./wsd:Types', namespaces)
         if types_elem is None:
             logger.debug('Probe message lacks wsd:Types element. Ignored.')
-            return None, None
+            return None
 
         types = types_elem.text
         if not types == WSD_TYPE_DEVICE:
             logger.debug('unknown discovery type ({}) for probe'.format(types))
-            return None, None
+            return None
 
         matches = ElementTree.Element('wsd:ProbeMatches')
         match = ElementTree.SubElement(matches, 'wsd:ProbeMatch')
@@ -710,13 +710,13 @@ class WSDHost(WSDUDPMessageHandler):
         addr = resolve.find('./wsa:EndpointReference/wsa:Address', namespaces)
         if addr is None:
             logger.debug('invalid resolve request: missing endpoint address')
-            return None, None
+            return None
 
         if not addr.text == args.uuid.urn:
-            logger.warn(
+            logger.warning(
                 'invalid resolve request: address ({}) does not '
                 'match own one ({})'.format(addr.text, args.uuid.urn))
-            return None, None
+            return None
 
         matches = ElementTree.Element('wsd:ResolveMatches')
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
