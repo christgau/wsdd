@@ -1192,11 +1192,14 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue
 
-            iface = self.interfaces[ifa_idx]
-            if h_type == self.RTM_NEWADDR:
-                self.handle_new_address(addr, ifa_family, iface)
-            elif h_type == self.RTM_DELADDR:
-                self.handle_deleted_address(addr, ifa_family, iface)
+            if ifa_idx in self.interfaces:
+                iface = self.interfaces[ifa_idx]
+                if h_type == self.RTM_NEWADDR:
+                    self.handle_new_address(addr, ifa_family, iface)
+                elif h_type == self.RTM_DELADDR:
+                    self.handle_deleted_address(addr, ifa_family, iface)
+            else:
+                logger.debug('unknown interface index: {}'.format(ifa_idx))
 
             offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
 
