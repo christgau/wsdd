@@ -803,6 +803,9 @@ class WSDHttpServer(http.server.HTTPServer):
             self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
         super().server_bind()
+
+    def server_activate(self):
+        super().server_activate()
         self.selector.register(self.fileno(), selectors.EVENT_READ, self)
         self.registered = True
 
