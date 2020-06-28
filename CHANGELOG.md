@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.6.1] - 2020-06-28
+
+### Fixed
+
+- Error when unknown interface index is received from Netlink socket on Linux (#45)
+- HTTP requests not passed to wsdd, preventing hosts to be discovered (#49)
+
 ## [0.6] - 2020-06-06
 
 ### Added
