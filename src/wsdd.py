@@ -1126,7 +1126,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW,
                                     socket.NETLINK_ROUTE)
-        self.socket.bind((os.getpid(), rtm_groups))
+        self.socket.bind((0, rtm_groups))
         self.selector.register(self.socket, selectors.EVENT_READ, self)
 
     def enumerate(self):
@@ -1134,8 +1134,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         kernel = (0, 0)
         req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, self.RTM_GETADDR,
-                          NLM_F_REQUEST | NLM_F_DUMP, 1, os.getpid(),
-                          socket.AF_PACKET)
+                          NLM_F_REQUEST | NLM_F_DUMP, 1, 0, socket.AF_PACKET)
         self.socket.sendto(req, kernel)
 
     def handle_request(self):

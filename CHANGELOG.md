@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Do not use PID in Netlink sockets in order to avoid issues with duplicated PIDs, e.g., when Docker is used.
+
 ## [0.6.1] - 2020-06-28
 
 ### Fixed

@@ -40,11 +40,11 @@ IFA_MSG_LEN = 8
 RTA_ALIGNTO = 4
 
 s = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
-s.bind((os.getpid(), RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR))
+s.bind((0, RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR))
 
 kernel = (0, 0)
 req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, RTM_GETADDR, NLM_F_REQUEST |
-                  NLM_F_DUMP, 1, os.getpid(), socket.AF_PACKET)
+                  NLM_F_DUMP, 1, 0, socket.AF_PACKET)
 
 s.sendto(req, kernel)
 
