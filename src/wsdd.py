@@ -95,6 +95,12 @@ class MulticastHandler:
         self.recv_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
+        # Could anyone ask the Linux folks for the rationale for this!?
+        if platform.system() == 'Linux':
+            IPV6_MULTICAST_ALL = 29
+            self.recv_socket.setsockopt(
+                socket.IPPROTO_IPV6, IPV6_MULTICAST_ALL, 0)
+
         # bind to network interface, i.e. scope and handle OS differences,
         # see Stevens: Unix Network Programming, Section 21.6, last paragraph
         try:
@@ -123,6 +129,10 @@ class MulticastHandler:
             struct.pack('@I', idx))
         self.recv_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+        if platform.system() == 'Linux':
+            IP_MULTICAST_ALL = 49
+            self.recv_socket.setsockopt(socket.IPPROTO_IP, IP_MULTICAST_ALL, 0)
 
         try:
             self.recv_socket.bind((WSD_MCAST_GRP_V4, WSD_UDP_PORT))
