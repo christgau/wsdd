@@ -605,7 +605,7 @@ class WSDClient(WSDUDPMessageHandler):
             with urllib.request.urlopen(request, None, 2.0) as stream:
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
-            logger.warn('could not fetch metadata from: {}'.format(url, e))
+            logger.warnng('could not fetch metadata from: {}'.format(url, e))
 
     def build_getmetadata_message(self, endpoint):
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
@@ -1021,7 +1021,7 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
 
     def handle_deleted_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.warn('deleted address {} on {}'.format(addr, interface.name))
+        logger.warning('deleted address {} on {}'.format(addr, interface.name))
 
         if not self.is_address_handled(addr_family, raw_addr, interface):
             return
@@ -1162,7 +1162,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 '@BBBBI', buf, offset)
             if (ifa_flags & IFA_F_DADFAILED or ifa_flags & IFA_F_HOMEADDRESS or
                ifa_flags & IFA_F_DEPRECATED or ifa_flags & IFA_F_TENTATIVE):
-                logger.warn('ignore address with invalid state {}'.format(
+                logger.warning('ignore address with invalid state {}'.format(
                     hex(ifa_flags)))
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue
