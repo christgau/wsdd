@@ -330,16 +330,22 @@ class WSDMessageHandler(object):
         """
         tree = ElementTree.fromstring(msg)
         header = tree.find('./soap:Header', namespaces)
-        msg_id = header.find('./wsa:MessageID', namespaces).text
+        msg_id_tag = header.find('./wsa:MessageID', namespaces)
+        if msg_id_tag is None:
+            return None
+
+        msg_id = msg_id_tag.text
 
         # if message came over a MulticastHandler, check for duplicates
         if mch and self.is_duplicated_msg(msg_id):
             logger.debug('known message ({0}): dropping it'.format(msg_id))
             return None
 
-        response = None
-        action = header.find('./wsa:Action', namespaces).text
-        body = tree.find('./soap:Body', namespaces)
+        action_tag = header.find('./wsa:Action', namespaces)
+        if action_tag is None:
+            return None
+
+        action = action_tag.text
         _, _, action_method = action.rpartition('/')
 
         if mch:
@@ -351,6 +357,10 @@ class WSDMessageHandler(object):
             # http logging is already done by according server
             logger.debug('processing WSD {} message ({})'.format(
                 action_method, msg_id))
+
+        body = tree.find('./soap:Body', namespaces)
+        if body is None:
+            return None
 
         logger.debug('incoming message content is {0}'.format(msg))
         if action in self.handlers:
