@@ -577,7 +577,7 @@ class WSDClient(WSDUDPMessageHandler):
         rm_path = 'wsd:ResolveMatches/wsd:ResolveMatch'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, rm_path)
         if not endpoint or not xaddrs:
-            logger.warning('resolve match without endpoint/xaddr')
+            logger.debug('resolve match without endpoint/xaddr')
             return
 
         xaddr = xaddrs.strip()
@@ -694,7 +694,7 @@ class WSDHost(WSDUDPMessageHandler):
 
         if scopes:
             # THINK: send fault message (see p. 21 in WSD)
-            logger.warning('scopes ({}) unsupported but probed'.format(scopes))
+            logger.debug('scopes ({}) unsupported but probed'.format(scopes))
             return None
 
         types_elem = probe.find('./wsd:Types', namespaces)
@@ -723,7 +723,7 @@ class WSDHost(WSDUDPMessageHandler):
             return None
 
         if not addr.text == args.uuid.urn:
-            logger.warning(
+            logger.debug(
                 'invalid resolve request: address ({}) does not '
                 'match own one ({})'.format(addr.text, args.uuid.urn))
             return None
@@ -1031,7 +1031,7 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
 
     def handle_deleted_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.warning('deleted address {} on {}'.format(addr, interface.name))
+        logger.info('deleted address {} on {}'.format(addr, interface.name))
 
         if not self.is_address_handled(addr_family, raw_addr, interface):
             return
@@ -1172,7 +1172,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 '@BBBBI', buf, offset)
             if (ifa_flags & IFA_F_DADFAILED or ifa_flags & IFA_F_HOMEADDRESS or
                ifa_flags & IFA_F_DEPRECATED or ifa_flags & IFA_F_TENTATIVE):
-                logger.warning('ignore address with invalid state {}'.format(
+                logger.debug('ignore address with invalid state {}'.format(
                     hex(ifa_flags)))
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue

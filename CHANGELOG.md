@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Lowered priority of non-essential, protocol-related and internal log messages (#53).
+
 ### Fixed
 
 - Do not use PID in Netlink sockets in order to avoid issues with duplicated PIDs, e.g., when Docker is used.
