@@ -97,9 +97,13 @@ class MulticastHandler:
 
         # Could anyone ask the Linux folks for the rationale for this!?
         if platform.system() == 'Linux':
-            IPV6_MULTICAST_ALL = 29
-            self.recv_socket.setsockopt(
-                socket.IPPROTO_IPV6, IPV6_MULTICAST_ALL, 0)
+            try:
+                # supported starting from Linux 4.20
+                IPV6_MULTICAST_ALL = 29
+                self.recv_socket.setsockopt(
+                    socket.IPPROTO_IPV6, IPV6_MULTICAST_ALL, 0)
+            except OSError as e:
+                logger.warning('cannot unset all_multicast: {}'.format(e))
 
         # bind to network interface, i.e. scope and handle OS differences,
         # see Stevens: Unix Network Programming, Section 21.6, last paragraph
@@ -625,7 +629,8 @@ class WSDClient(WSDUDPMessageHandler):
             with urllib.request.urlopen(request, None, 2.0) as stream:
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
-            logger.warnng('could not fetch metadata from: {}'.format(url, e))
+            logger.warning('could not fetch metadata from: {} {}'.format(
+                url, e))
 
     def build_getmetadata_message(self, endpoint):
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
