@@ -444,6 +444,7 @@ class WSDDiscoveredDevice(object):
         self.last_seen = None
         self.addresses = {}
         self.props = {}
+        self.display_name = ''
 
         self.update(xml_str, xaddr, interface)
 
@@ -454,15 +455,15 @@ class WSDDiscoveredDevice(object):
         for section in sections:
             dialect = section.attrib['Dialect']
             if dialect == WSDP_URI + '/ThisDevice':
-                self.extract_wsdp_props(section, self.props, dialect)
+                self.extract_wsdp_props(section, dialect)
             elif dialect == WSDP_URI + '/ThisModel':
-                self.extract_wsdp_props(section, self.props, dialect)
+                self.extract_wsdp_props(section, dialect)
             elif dialect == WSDP_URI + '/Relationship':
                 host_xpath = ('wsdp:Relationship[@Type="{}/host"]/wsdp:Host'
                               .format(WSDP_URI))
                 host_sec = section.find(host_xpath, namespaces)
                 if (host_sec):
-                    self.extract_host_props(host_sec, self.props)
+                    self.extract_host_props(host_sec)
             else:
                 logger.debug('unknown metadata dialect ({})'.format(dialect))
 
@@ -474,12 +475,17 @@ class WSDDiscoveredDevice(object):
             self.addresses[interface].add(addr)
 
         self.last_seen = time.time()
-        logger.info('discovered {} in {} on {}%{}'.format(
-            self.props['DisplayName'], self.props['BelongsTo'], addr,
-            interface.interface.name))
+        if ('DisplayName' in self.props) and ('BelongsTo' in self.props):
+            logger.info('discovered {} in {} on {}%{}'.format(
+                self.props['DisplayName'], self.props['BelongsTo'], addr,
+                interface.interface.name))
+        elif 'FriendlyName' in self.props:
+            logger.info('discovered {} on {}%{}', self.props['FriendlyName'],
+                        addr, interface.interface.name)
+
         logger.debug(str(self.props))
 
-    def extract_wsdp_props(self, root, target_dict, dialect):
+    def extract_wsdp_props(self, root, dialect):
         _, _, propsRoot = dialect.rpartition('/')
         # XPath support is limited, so filter by namespace on our own
         nodes = root.findall('./wsdp:{0}/*'.format(propsRoot), namespaces)
@@ -487,16 +493,16 @@ class WSDDiscoveredDevice(object):
         prop_nodes = [n for n in nodes if n.tag.startswith(ns_prefix)]
         for node in prop_nodes:
             tag_name = node.tag[len(ns_prefix):]
-            target_dict[tag_name] = node.text
+            self.props[tag_name] = node.text
 
-    def extract_host_props(self, root, target_dict):
+    def extract_host_props(self, root):
         types = root.findtext('wsdp:Types', '', namespaces)
-        target_dict['types'] = types.split(' ')
+        self.props['types'] = types.split(' ')
         if types != PUB_COMPUTER:
             return
 
         comp = root.findtext(PUB_COMPUTER, '', namespaces)
-        target_dict['DisplayName'], _, target_dict['BelongsTo'] = (
+        self.props['DisplayName'], _, self.props['BelongsTo'] = (
             comp.partition('/'))
 
 
@@ -905,8 +911,8 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
                 dev_uuid,
-                dev.props['DisplayName'],
-                dev.props['BelongsTo'],
+                dev.display_name,
+                dev.props['BelongsTo'] if 'BelongsTo' in dev.props else '',
                 datetime.datetime.fromtimestamp(dev.last_seen).isoformat(
                     'T', 'seconds'),
                 ','.join(addrs_str))
