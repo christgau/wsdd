@@ -1171,6 +1171,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
         offset = 0
         while offset < len(buf):
             h_len, h_type, _, _, _ = struct.unpack_from('@IHHII', buf, offset)
+            offset += NLM_HDR_LEN
 
             msg_len = h_len - NLM_HDR_LEN
             if msg_len < 0:
@@ -1181,7 +1182,6 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
                 continue
 
-            offset += NLM_HDR_LEN
             # decode ifaddrmsg as in rtnetlink.h
             ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(
                 '@BBBBI', buf, offset)
