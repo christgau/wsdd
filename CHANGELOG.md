@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.6.2] - 2020-10-18
 
 ### Changed
 
@@ -10,6 +10,8 @@
 
 - Do not use PID in Netlink sockets in order to avoid issues with duplicated PIDs, e.g., when Docker is used.
 - Prevent exceptions due to invalid incoming messages.
+- HTTP server address family wrong when interface address is added (#62)
+- Error when interface address is removed (#62)
 
 ## [0.6.1] - 2020-06-28
 
