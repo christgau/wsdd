@@ -821,9 +821,11 @@ class WSDHttpServer(http.server.HTTPServer):
     """ HTTP server both with IPv6 support and WSD handling """
 
     def __init__(self, mch, RequestHandlerClass, addr_family, sel):
-        if addr_family == socket.AF_INET6:
-            type(self).address_family = addr_family
+        # hacky way to convince HTTP/SocketServer of the address family
+        type(self).address_family = addr_family
 
+        # remember actual address family used by the server instance
+        self.addr_family = addr_family
         self.mch = mch
         self.selector = sel
         self.wsd_handler = WSDHttpMessageHandler()
@@ -832,7 +834,7 @@ class WSDHttpServer(http.server.HTTPServer):
         super().__init__(mch.listen_address, RequestHandlerClass)
 
     def server_bind(self):
-        if type(self).address_family == socket.AF_INET6:
+        if self.address_family == socket.AF_INET6:
             self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
         super().server_bind()
