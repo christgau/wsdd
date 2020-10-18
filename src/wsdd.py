@@ -1056,7 +1056,7 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
         addr = socket.inet_ntop(addr_family, raw_addr)
         logger.info('deleted address {} on {}'.format(addr, interface.name))
 
-        if not self.is_address_handled(addr_family, raw_addr, interface):
+        if not self.is_address_handled(raw_addr, addr_family, interface):
             return
 
         mch = self.get_mch_by_address(addr_family, addr, interface)
