@@ -12,6 +12,10 @@ LOG_FILE="${WSDD_LOG_FILE:-/var/log/wsdd.log}"
 WSDD_EXEC="/usr/bin/wsdd"
 RUN_AS_USER="${WSDD_USER:-daemon:daemon}"
 
+SVCPREFIX="${SVCNAME%.*}"
+INSTNAME="${SVCNAME:${#SVCPREFIX}+1}"
+
+
 start() {
 	ebegin "Starting ${RC_SVCNAME} daemon"
 
@@ -32,7 +36,29 @@ start() {
 			OPTS="-w ${GROUP} ${OPTS}"
 		fi
 	else
-		OPTS="-w ${WSDD_WORKGROUP} ${OPTS}"
+		OPTS="-w ${WSDD_WORKGROUP} ${OPTS}"	
+	fi
+
+	if [ -z "${WSDD_HOST}" ]; then
+		WSDD_HOST="${INSTNAME}"
+	fi
+
+	if [ -n "${WSDD_HOST}" ]; then
+		OPTS="-n ${WSDD_HOST} ${OPTS}"	
+	fi
+
+	if [ -n "${WSDD_INTERFACE}" ]; then
+		OPTS="-i ${WSDD_INTERFACE} ${OPTS}"	
+	fi
+
+	if [ -n "${INSTNAME}" ]; then
+		if ! [[ "${OPTS}" =~ -i ]] && ! [[ "${OPTS}" =~ --interface ]]; then
+			ewarn "If running multiple service-instances set WSDD_INTERFACE or parameter -i"
+		fi
+		if [ -f "/etc/conf.d/${SVCPREFIX}" ]; then
+			# May lead to unexpected behavior because of inhertitance, show config"
+			einfo "Using hostname ${WSDD_HOST} on ${WSDD_INTERFACE}"
+		fi
 	fi
 
 	if [ ! -r "${LOG_FILE}" ]; then

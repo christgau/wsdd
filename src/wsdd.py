@@ -1505,7 +1505,11 @@ def parse_args():
         logger.warning('no interface given, using all interfaces')
 
     if not args.uuid:
-        args.uuid = uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
+        if args.hostname:
+            hn = '{0}.{1}'.format(args.hostname, args.workgroup)
+        if not hn:
+            hn=socket.gethostname()
+        args.uuid = uuid.uuid5(uuid.NAMESPACE_DNS, hn)
         logger.info('using pre-defined UUID {0}'.format(str(args.uuid)))
     else:
         args.uuid = uuid.UUID(args.uuid)

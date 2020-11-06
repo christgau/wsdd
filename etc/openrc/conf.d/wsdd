@@ -10,6 +10,12 @@
 # Disable automatic detection of the workgroup from samba configuration.
 #WSDD_WORKGROUP="MYGROUP"
 
+# Listen on interface or IP only
+#WSDD_INTERFACE="192.168.0.1"
+
+# Announce this name instead of hostname
+#WSDD_HOST="ADAMS"
+
 # Additional options for the daemon, e.g. to listen on interface eth0 only.
 # Refer to wsdd(1) for details.
 #WSDD_OPTS="-i eth0"
