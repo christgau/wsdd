@@ -67,7 +67,7 @@ There are user-maintained packages for which you need to add the repository to
 `deb https://pkg.ltec.ch/public/ distro main`
 
 Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
-`lsb-release -cs` if unsure). After an `apt update` you can install wsdd with
+`lsb_release -cs` if unsure). After an `apt update` you can install wsdd with
 `apt install wsdd`. You may also add the public key to the trusted ones on your
 system.
 
