@@ -68,8 +68,9 @@ There are user-maintained packages for which you need to add the repository to
 
 Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
 `lsb_release -cs` if unsure). After an `apt update` you can install wsdd with
-`apt install wsdd`. You may also add the public key to the trusted ones on your
-system.
+`apt install wsdd`.
+
+You also need to import the public key of the repository like this `apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key`.
 
 ### Gentoo
 
