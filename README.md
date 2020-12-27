@@ -116,7 +116,7 @@ allowed.
 By default wsdd runs in host mode and binds to all interfaces with only
 warnings and error messages enabled. In this configuration the host running
 wsdd is discovered with its configured hostname and belong to a default
-workgroup. The dicovery mode, which allows to search for other WSD-compatible
+workgroup. The discovery mode, which allows to search for other WSD-compatible
 devices must be enabled explicitely. Both modes can be used simultanously. See
 below for details.
 
