@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Messages are sent via the correct socket to comply with the intended/specified message flow. This also eases the firewall configuration (#72).
+
 ## [0.6.2] - 2020-10-18
 
 ### Changed

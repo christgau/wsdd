@@ -183,6 +183,15 @@ class MulticastHandler:
             for handler in self.message_handlers[s]:
                 handler.handle_request(msg, address)
 
+    def send(self, msg, addr):
+        # Request from a client must be answered from a socket that is bound
+        # to the WSD port, i.e. the recv_socket. Messages to multicast
+        # addresses are sent over the dedicated send socket.
+        if addr == self.multicast_address:
+            self.send_socket.sendto(msg, addr)
+        else:
+            self.recv_socket.sendto(msg, addr)
+
 
 # constants for WSD XML/SOAP parsing
 WSA_URI = 'http://schemas.xmlsoap.org/ws/2004/08/addressing'
@@ -1536,7 +1545,7 @@ def send_outstanding_messages(block=False):
         addr = send_queue[-1][2]
         msg = send_queue[-1][3]
         try:
-            mch.send_socket.sendto(msg, addr)
+            mch.send(msg, addr)
         except Exception as e:
             logger.error('error while sending packet on {}: {}'.format(
                 mch.interface.name, e))

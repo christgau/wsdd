@@ -136,7 +136,8 @@ domain socket to which a client can connect to.
 .PP
 Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
 IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
-multicast address (`fe02::c`) is used.
+multicast address (`fe02::c`) is used. Outgoing unicast UDP traffic from port
+3702 must be allowed too.
 .PP
 Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
 allowed.
