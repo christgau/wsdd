@@ -1150,6 +1150,10 @@ RTA_ALIGNTO = 4
 RTA_LEN = 4
 
 
+def align_to(x, n):
+    return ((x + n - 1) // n) * n
+
+
 class NetlinkAddressMonitor(NetworkAddressMonitor):
     """
     Implementation of the AddressMonitor for Netlink sockets, i.e. Linux
@@ -1198,7 +1202,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
             if h_type != self.RTM_NEWADDR and h_type != self.RTM_DELADDR:
                 logger.debug('invalid rtm_message type {}'.format(h_type))
-                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
             # decode ifaddrmsg as in rtnetlink.h
@@ -1208,7 +1212,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                ifa_flags & IFA_F_DEPRECATED or ifa_flags & IFA_F_TENTATIVE):
                 logger.debug('ignore address with invalid state {}'.format(
                     hex(ifa_flags)))
-                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
             addr = None
@@ -1230,12 +1234,12 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                     addr = buf[i + 4:i + 4 + 16]
                 elif attr_type == IFA_FLAGS:
                     _, ifa_flags = struct.unpack_from('HI', buf, i)
-                i += ((attr_len + 1) // RTA_ALIGNTO) * RTA_ALIGNTO
+                i += align_to(attr_len, RTA_ALIGNTO)
                 logger.debug('rt_attr {} {}'.format(attr_len, attr_type))
 
             if addr is None:
                 logger.debug('not address in RTM message')
-                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
             if ifa_idx in self.interfaces:
@@ -1247,7 +1251,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
             else:
                 logger.debug('unknown interface index: {}'.format(ifa_idx))
 
-            offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+            offset += align_to(msg_len, NLM_HDR_ALIGNTO)
 
     def cleanup(self):
         self.selector.unregister(self.socket)
@@ -1381,7 +1385,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                     if_name = (buf[off_name:off_name + name_len]).decode()
                     intf = self.add_interface(if_name, idx, idx)
 
-            offset += (((sa_len + SA_ALIGNTO - 1) // SA_ALIGNTO) * SA_ALIGNTO
+            offset += (align_to(sa_len, SA_ALIGNTO)
                        if sa_len > 0 else SA_ALIGNTO)
             addr_type_idx = addr_type_idx << 1
 

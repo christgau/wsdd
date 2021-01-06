@@ -39,6 +39,11 @@ IFA_MSG_LEN = 8
 # hardcoded as 4 in rtnetlink.h
 RTA_ALIGNTO = 4
 
+
+def align_to(x, n):
+    return ((x + n - 1) // n) * n
+
+
 s = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
 s.bind((0, RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR))
 
@@ -62,7 +67,7 @@ while True:
             break
 
         if h_type != RTM_NEWADDR and h_type != RTM_DELADDR:
-            offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+            offset += align_to(msg_len, NLM_HDR_ALIGNTO)
             # print('not interested in message type ', h_type)
             # print('new offset: ', offset)
             continue
@@ -89,10 +94,10 @@ while True:
                 addr = socket.inet_ntop(socket.AF_INET6, b)
             elif attr_type == IFA_FLAGS:
                 _, ifa_flags = struct.unpack_from('HI', buf, i)
-            i += ((attr_len + 1) // RTA_ALIGNTO) * RTA_ALIGNTO
+            i += align_to(attr_len, RTA_ALIGNTO)
 
         msg_type = 'NEW' if h_type == RTM_NEWADDR else 'DEL'
         print('{} addr on interface {} {} [{}]: {}'.format(msg_type, ifa_name,
               ifa_idx, hex(ifa_flags), addr))
 
-        offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+        offset += align_to(msg_len, NLM_HDR_ALIGNTO)
