@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## [0.6.3] - 2021-01-10
+
+### Added
+
+- Include instructions for adding repository keys under Debian/Ubuntu in README.
 
 ### Fixed
 
