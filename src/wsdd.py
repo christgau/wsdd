@@ -867,11 +867,12 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path != '/' + str(args.uuid):
-            self.send_error()
+            self.send_error(http.HTTPStatus.NOT_FOUND)
 
         ct = self.headers['Content-Type']
         if ct is None or not ct.startswith(MIME_TYPE_SOAP_XML):
-            self.send_error(http.HTTPStatus.NOT_FOUND, 'Invalid Content-Type')
+            self.send_error(http.HTTPStatus.BAD_REQUEST,
+                            'Invalid Content-Type')
 
         content_length = int(self.headers['Content-Length'])
         body = self.rfile.read(content_length)

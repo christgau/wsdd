@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+ - HTTP status code 404 is sent in case of an non-existing path (#79).
+
+### Changed
+
+ - Send HTTP 400 in case of wrong content type.
+
 ## [0.6.3] - 2021-01-10
 
 ### Added
