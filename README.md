@@ -104,13 +104,16 @@ actual distribution/installation where they are to be used.
 
 ## Firewall Setup
 
-Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
-IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
-multicast address (`ff02::c`) is used. Outgoing unicast UDP traffic from port
-3702 must be allowed too.
+Traffic for the following ports, directions and addresses must be allowed.
 
-Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
-allowed.
+ * incoming and outgoing traffic to udp/3702 with multicast source/destination:
+   - `239.255.255.250` for IPv4
+   - `ff02::c` for IPv6
+ * outgoing unicast traffic from udp/3702
+ * incoming to tcp/5357
+
+You should further restrict the traffic to the (link-)local subnet, e.g. by using
+the `fe80::/10` address space for IPv6.
 
 ## Options
 

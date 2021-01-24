@@ -5,6 +5,7 @@
 ### Fixed
 
  - HTTP status code 404 is sent in case of an non-existing path (#79).
+ - Data is now sent correctly again on FreeBSD as well as on Linux (#80).
 
 ### Changed
 

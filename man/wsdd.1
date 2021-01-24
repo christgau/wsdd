@@ -134,13 +134,16 @@ domain socket to which a client can connect to.
     wsdd \-v \-w $SMB_GROUP -u daemon:daemon -c /var/run/wsdd/chroot
 .SH FIREWALL SETUP
 .PP
-Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
-IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
-multicast address (`fe02::c`) is used. Outgoing unicast UDP traffic from port
-3702 must be allowed too.
+Traffic for the following ports, directions and addresses must be allowed:
+.TP
+- Incoming and outgoing traffic to udp/3702 with multicast source/destination: 239.255.255.250 for IPv4 and ff02::c for IPv6
+.TP
+- Outgoing unicast traffic from udp/3702
+.TP
+- Incoming traffic to tcp/5357
 .PP
-Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
-allowed.
+You should further restrict the traffic to the (link-)local subnet, e.g. by
+using the `fe80::/10` address space for IPv6.
 .SH SERVER INTERFACE
 When the discovery mode is used, wsdd provides a text-based line-oriented
 server interface to query information and trigger actions. The interface can be

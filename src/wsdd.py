@@ -43,16 +43,30 @@ class MulticastHandler:
     """
     # TODO: this one needs some cleanup
     def __init__(self, family, address, interface, selector):
+        # network address, family, and interface name
         self.address = address
         self.family = family
         self.interface = interface
+
+        # create individual interface-bound sockets for:
+        #  - receiving multicast traffic
+        #  - sending multicast from a socket bound to WSD port
+        #  - sending unicast messages from a random port
         self.recv_socket = socket.socket(self.family, socket.SOCK_DGRAM)
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+        self.mc_send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+        self.uc_send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+
+        # the string representation of the local address
+        # overridden in network setup (for IPv6)
         self.transport_address = address
+
+        # family-specific multicast address and local HTTP server (tuples)
         self.multicast_address = None
         self.listen_address = None
 
+        # dictionary that holds objects with a handle_request method for the
+        # sockets created above
         self.message_handlers = {}
         self.selector = selector
 
@@ -68,15 +82,19 @@ class MulticastHandler:
         logger.debug('will listen for HTTP traffic on address {0}'.format(
             self.listen_address))
 
+        # register calbacks for incoming data (also for mc)
         self.selector.register(self.recv_socket, selectors.EVENT_READ, self)
-        self.selector.register(self.send_socket, selectors.EVENT_READ, self)
+        self.selector.register(self.mc_send_socket, selectors.EVENT_READ, self)
+        self.selector.register(self.uc_send_socket, selectors.EVENT_READ, self)
 
     def cleanup(self):
         self.selector.unregister(self.recv_socket)
-        self.selector.unregister(self.send_socket)
+        self.selector.unregister(self.mc_send_socket)
+        self.selector.unregister(self.uc_send_socket)
 
         self.recv_socket.close()
-        self.send_socket.close()
+        self.uc_send_socket.close()
+        self.mc_send_socket.close()
 
     def handles(self, family, addr, interface):
         return (self.family == family and self.address == addr and
@@ -112,11 +130,14 @@ class MulticastHandler:
         except OSError:
             self.recv_socket.bind(('::', 0, 0, idx))
 
-        self.send_socket.setsockopt(
+        # bind unicast socket to interface address and ephemeral port
+        self.uc_send_socket.bind((self.address, WSD_UDP_PORT, 0, idx))
+
+        self.mc_send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
-        self.send_socket.setsockopt(
+        self.mc_send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
-        self.send_socket.setsockopt(
+        self.mc_send_socket.setsockopt(
             socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
 
         self.transport_address = '[{0}]'.format(self.address)
@@ -143,11 +164,14 @@ class MulticastHandler:
         except OSError:
             self.recv_socket.bind(('', WSD_UDP_PORT))
 
-        self.send_socket.setsockopt(
+        # bind unicast socket to interface address and WSD's udp port
+        self.uc_send_socket.bind((self.address, WSD_UDP_PORT))
+
+        self.mc_send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
-        self.send_socket.setsockopt(
+        self.mc_send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-        self.send_socket.setsockopt(
+        self.mc_send_socket.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
 
         self.listen_address = (self.address, WSD_HTTP_PORT)
@@ -171,12 +195,14 @@ class MulticastHandler:
 
     def handle_request(self, key):
         s = None
-        if key.fileobj == self.send_socket:
-            s = self.send_socket
+        if key.fileobj == self.uc_send_socket:
+            s = self.uc_send_socket
+        elif key.fileobj == self.mc_send_socket:
+            s = self.mc_send_socket
         elif key.fileobj == self.recv_socket:
             s = self.recv_socket
         else:
-            return
+            raise ValueError("Unknown socket passed as key.")
 
         msg, address = s.recvfrom(WSD_MAX_LEN)
         if s in self.message_handlers:
@@ -188,9 +214,9 @@ class MulticastHandler:
         # to the WSD port, i.e. the recv_socket. Messages to multicast
         # addresses are sent over the dedicated send socket.
         if addr == self.multicast_address:
-            self.send_socket.sendto(msg, addr)
+            self.mc_send_socket.sendto(msg, addr)
         else:
-            self.recv_socket.sendto(msg, addr)
+            self.uc_send_socket.sendto(msg, addr)
 
 
 # constants for WSD XML/SOAP parsing
@@ -522,7 +548,7 @@ class WSDClient(WSDUDPMessageHandler):
     def __init__(self, mch, known_devices):
         super().__init__(mch)
 
-        self.mch.add_handler(self.mch.send_socket, self)
+        self.mch.add_handler(self.mch.mc_send_socket, self)
         self.mch.add_handler(self.mch.recv_socket, self)
 
         self.probes = {}
@@ -538,7 +564,7 @@ class WSDClient(WSDUDPMessageHandler):
         self.send_probe()
 
     def cleanup(self):
-        self.mch.remove_handler(self.mch.send_socket, self)
+        self.mch.remove_handler(self.mch.mc_send_socket, self)
         self.mch.remove_handler(self.mch.recv_socket, self)
 
     def send_probe(self):
