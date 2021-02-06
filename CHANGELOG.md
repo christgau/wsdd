@@ -1,15 +1,19 @@
 # Changelog
 
-## Unreleased
+## [0.6.4] - 2021-02-06
+
+### Added
+
+- Introduce `-v`/`--version` command line switch to show program version.
 
 ### Fixed
 
- - HTTP status code 404 is sent in case of an non-existing path (#79).
- - Data is now sent correctly again on FreeBSD as well as on Linux (#80).
+- HTTP status code 404 is sent in case of an non-existing path (#79).
+- Data is now sent correctly again on FreeBSD as well as on Linux (#80).
 
 ### Changed
 
- - Send HTTP 400 in case of wrong content type.
+- Send HTTP 400 in case of wrong content type.
 
 ## [0.6.3] - 2021-01-10
 

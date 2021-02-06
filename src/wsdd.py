@@ -35,6 +35,8 @@ import pwd
 import grp
 import datetime
 
+WSDD_VERSION = '0.6.4'
+
 
 class MulticastHandler:
     """
@@ -1522,8 +1524,16 @@ def parse_args():
         '-o', '--no-host',
         help='disable server mode operation (host will be undiscoverable)',
         action='store_true')
+    parser.add_argument(
+        '-V', '--version',
+        help='show version number and exit',
+        action='store_true')
 
     args = parser.parse_args(sys.argv[1:])
+
+    if args.version:
+        print('wsdd - Web Service Discovery Daemon, v{}'.format(WSDD_VERSION))
+        sys.exit(0)
 
     if args.verbose == 1:
         log_level = logging.INFO
