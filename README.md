@@ -185,6 +185,10 @@ below for details.
      -v/--verbose sets the log level to INFO. More -v options set the log level
      to DEBUG.
 
+ * `-V`, `--version`
+
+     Show the version number and exit.
+
 ### Host Operation Mode
 
 In host mode, the device running wsdd can be discovered by Windows.
@@ -262,8 +266,8 @@ This mode allows to search for other WSD-compatible devices.
 (Read the source for more details)
 
 For each specified (or all) network interfaces, except for loopback, an UDP
-multicast socket for message reception, an UDP send socket for replying
-messages using unicast, and a listening TCP socket is created. This is done for
+multicast socket for message reception, two UDP sockets for replying using
+unicast as well as sending multicast traffic, and a listening TCP socket are created. This is done for
 both the IPv4 and the IPv6 address family if not configured otherwise by the
 command line arguments (see above). Upon startup a _Hello_ message is sent.
 When wsdd terminates due to a SIGTERM signal or keyboard interrupt, a graceful
