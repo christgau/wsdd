@@ -1351,6 +1351,18 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
+            # In case of IPv6 only addresses, there appears to be no IFA_LABEL
+            # message. Therefore, the name is requested by other means (#94)
+            if ifa_idx not in self.interfaces:
+                try:
+                    if_name = socket.if_indextoname(ifa_idx)
+                    self.add_interface(if_name, ifa_idx, ifa_scope)
+                except OSError:
+                    # accept this exception (which should not occur)
+                    pass
+
+            # In case really strange things happen and we could not find out the
+            # interface name for the returned ifa_idx, we... log a message.
             if ifa_idx in self.interfaces:
                 iface = self.interfaces[ifa_idx]
                 if h_type == self.RTM_NEWADDR:
