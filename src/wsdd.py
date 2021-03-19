@@ -58,6 +58,8 @@ class MulticastHandler:
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.mc_send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
         self.uc_send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+        self.uc_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
+                                       1)
 
         # the string representation of the local address
         # overridden in network setup (for IPv6)
@@ -132,7 +134,7 @@ class MulticastHandler:
         except OSError:
             self.recv_socket.bind(('::', 0, 0, idx))
 
-        # bind unicast socket to interface address and ephemeral port
+        # bind unicast socket to interface address and WSD's udp port
         self.uc_send_socket.bind((self.address, WSD_UDP_PORT, 0, idx))
 
         self.mc_send_socket.setsockopt(
