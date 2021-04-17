@@ -329,7 +329,8 @@ Windows.
 # Contributing
 
 Contributions are welcome. Please ensure PEP8 compliance when submitting
-patches or pull requests.
+patches or pull requests. Opposite to PEP8, the maximum number of characters per
+line is increased to 120.
 
 # Licence
 

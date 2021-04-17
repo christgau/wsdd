@@ -3,7 +3,6 @@
 # Not really a test case, but a PoC for getting notified about changes in
 # network addreses on Linux using netlink sockets.
 
-import os
 import socket
 import struct
 
@@ -48,8 +47,8 @@ s = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
 s.bind((0, RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR))
 
 kernel = (0, 0)
-req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, RTM_GETADDR, NLM_F_REQUEST |
-                  NLM_F_DUMP, 1, 0, socket.AF_PACKET)
+req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, RTM_GETADDR,
+                  NLM_F_REQUEST | NLM_F_DUMP, 1, 0, socket.AF_PACKET)
 
 s.sendto(req, kernel)
 
@@ -75,7 +74,7 @@ while True:
         offset += NLM_HDR_LEN
         # decode ifaddrmsg as in rtnetlink.h
         ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(
-                '@BBBBI', buf, offset)
+            '@BBBBI', buf, offset)
 
         ifa_name = ''
         addr = ''
