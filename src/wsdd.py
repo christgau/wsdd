@@ -14,7 +14,7 @@
 import sys
 import signal
 import socket
-import selectors
+import asyncio
 import struct
 import argparse
 import uuid
@@ -44,7 +44,7 @@ class MulticastHandler:
     given address family. It provides multicast sender and receiver sockets
     """
     # TODO: this one needs some cleanup
-    def __init__(self, family, address, interface, selector):
+    def __init__(self, family, address, interface, aio_loop):
         # network address, family, and interface name
         self.address = address
         self.family = family
@@ -71,7 +71,7 @@ class MulticastHandler:
         # dictionary that holds objects with a handle_request method for the
         # sockets created above
         self.message_handlers = {}
-        self.selector = selector
+        self.aio_loop = aio_loop
 
         if family == socket.AF_INET:
             self.init_v4()
@@ -84,14 +84,14 @@ class MulticastHandler:
         logger.debug('will listen for HTTP traffic on address {0}'.format(self.listen_address))
 
         # register calbacks for incoming data (also for mc)
-        self.selector.register(self.recv_socket, selectors.EVENT_READ, self)
-        self.selector.register(self.mc_send_socket, selectors.EVENT_READ, self)
-        self.selector.register(self.uc_send_socket, selectors.EVENT_READ, self)
+        self.aio_loop.add_reader(self.recv_socket.fileno(), self.handle_request, self.recv_socket)
+        self.aio_loop.add_reader(self.mc_send_socket.fileno(), self.handle_request, self.mc_send_socket)
+        self.aio_loop.add_reader(self.uc_send_socket.fileno(), self.handle_request, self.uc_send_socket)
 
     def cleanup(self):
-        self.selector.unregister(self.recv_socket)
-        self.selector.unregister(self.mc_send_socket)
-        self.selector.unregister(self.uc_send_socket)
+        self.aio_loop.unregister(self.recv_socket)
+        self.aio_loop.unregister(self.mc_send_socket)
+        self.aio_loop.unregister(self.uc_send_socket)
 
         self.recv_socket.close()
         self.uc_send_socket.close()
@@ -163,11 +163,11 @@ class MulticastHandler:
         self.listen_address = (self.address, WSD_HTTP_PORT)
 
     def add_handler(self, socket, handler):
-        try:
-            self.selector.register(socket, selectors.EVENT_READ, self)
-        except KeyError:
-            # accept attempts of multiple registrations
-            pass
+        # try:
+        #    self.selector.register(socket, selectors.EVENT_READ, self)
+        # except KeyError:
+        #    # accept attempts of multiple registrations
+        #    pass
 
         if socket in self.message_handlers:
             self.message_handlers[socket].append(handler)
@@ -181,11 +181,11 @@ class MulticastHandler:
 
     def handle_request(self, key):
         s = None
-        if key.fileobj == self.uc_send_socket:
+        if key == self.uc_send_socket:
             s = self.uc_send_socket
-        elif key.fileobj == self.mc_send_socket:
+        elif key == self.mc_send_socket:
             s = self.mc_send_socket
-        elif key.fileobj == self.recv_socket:
+        elif key == self.recv_socket:
             s = self.recv_socket
         else:
             raise ValueError("Unknown socket passed as key.")
@@ -269,11 +269,12 @@ args = None
 logger = None
 
 
-class WSDMessageHandler(object):
+class WSDMessageHandler:
     known_messages = collections.deque([], WSD_MAX_KNOWN_MESSAGES)
 
     def __init__(self):
         self.handlers = {}
+        self.pending_tasks = []
 
     def cleanup(self):
         pass
@@ -424,33 +425,48 @@ class WSDUDPMessageHandler(WSDMessageHandler):
         super().__init__()
 
         self.mch = mch
+        self.tearing_down = False
 
     def teardown(self):
-        pass
+        self.tearing_down = True
+
+    def send_datagram(self, msg, dst):
+        try:
+            self.mch.send(msg, dst)
+        except Exception as e:
+            logger.error('error while sending packet on {}: {}'.format(self.mch.interface.name, e))
 
     def enqueue_datagram(self, msg, address=None, msg_type=None):
-        """
-        Add an outgoing WSD (SOAP) message to the queue of outstanding messages
-
-        Implements SOAP over UDP, Appendix I.
-        """
         if not address:
             address = self.mch.multicast_address
 
         if msg_type:
-            logger.debug('scheduling {0} message via {1} to {2}'.format(msg_type, self.mch.interface.name, address))
+            logger.info('scheduling {0} message via {1} to {2}'.format(msg_type, self.mch.interface.name, address))
 
+        schedule_task = self.mch.aio_loop.create_task(self.schedule_datagram(msg, address))
+        # Add this task to the pending list during teardown to wait during shutdown
+        if self.tearing_down:
+            self.pending_tasks.append(schedule_task)
+
+    async def schedule_datagram(self, msg, address):
+        """
+        Schedule to send the given message to the given address.
+
+        Implements SOAP over UDP, Appendix I.
+        """
+
+        self.send_datagram(msg, address)
+
+        delta = 0
         msg_count = MULTICAST_UDP_REPEAT if address == self.mch.multicast_address else UNICAST_UDP_REPEAT
-
-        due_time = time.time()
-        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
-        for i in range(msg_count):
-            send_queue.append([due_time, self.mch, address, msg])
-            due_time += t / 1000
-            t = min(t * 2, UDP_UPPER_DELAY)
+        delta = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
+        for i in range(msg_count - 1):
+            await asyncio.sleep(delta / 1000.0)
+            self.send_datagram(msg, address)
+            delta = min(delta * 2, UDP_UPPER_DELAY)
 
 
-class WSDDiscoveredDevice(object):
+class WSDDiscoveredDevice:
 
     def __init__(self, xml_str, xaddr, interface):
         self.last_seen = None
@@ -554,6 +570,7 @@ class WSDClient(WSDUDPMessageHandler):
         self.probes[i] = time.time()
 
     def teardown(self):
+        super().teardown()
         self.remove_outdated_probes()
 
     def handle_request(self, msg, address):
@@ -692,6 +709,7 @@ class WSDHost(WSDUDPMessageHandler):
         self.send_hello()
 
     def teardown(self):
+        super().teardown()
         self.send_bye()
 
     def handle_request(self, msg, address):
@@ -822,14 +840,14 @@ class WSDHttpMessageHandler(WSDMessageHandler):
 class WSDHttpServer(http.server.HTTPServer):
     """ HTTP server both with IPv6 support and WSD handling """
 
-    def __init__(self, mch, RequestHandlerClass, addr_family, sel):
+    def __init__(self, mch, RequestHandlerClass, addr_family, aio_loop):
         # hacky way to convince HTTP/SocketServer of the address family
         type(self).address_family = addr_family
 
         # remember actual address family used by the server instance
         self.addr_family = addr_family
         self.mch = mch
-        self.selector = sel
+        self.aio_loop = aio_loop
         self.wsd_handler = WSDHttpMessageHandler()
         self.registered = False
 
@@ -843,12 +861,12 @@ class WSDHttpServer(http.server.HTTPServer):
 
     def server_activate(self):
         super().server_activate()
-        self.selector.register(self.fileno(), selectors.EVENT_READ, self)
+        self.aio_loop.add_reader(self.fileno(), self.handle_request)
         self.registered = True
 
     def server_close(self):
         if self.registered:
-            self.selector.unregister(self.fileno())
+            self.aio_loop.remove_reader(self.fileno())
         super().server_close()
 
 
@@ -879,14 +897,50 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(http.HTTPStatus.BAD_REQUEST)
 
 
-class ApiRequestHandler(socketserver.StreamRequestHandler):
+class ApiServer:
 
-    def handle(self):
-        line = str(self.rfile.readline().strip(), 'utf-8')
-        if not line:
+    def __init__(self, aio_loop, listen_address, clients, known_devices):
+        self.clients = clients
+        self.known_devices = known_devices
+        self.server = None
+
+        # defer server creation
+        self.create_task = aio_loop.create_task(self.create_server(aio_loop, listen_address))
+
+    async def create_server(self, aio_loop, listen_address):
+
+        if isinstance(listen_address, int) or listen_address.isnumeric():
+            self.server = await aio_loop.create_task(asyncio.start_server(self.on_connect, host='localhost',
+                                                     port=int(listen_address), loop=aio_loop, reuse_address=True,
+                                                     reuse_port=True))
+        else:
+            self.server = await aio_loop.create_task(asyncio.start_unix_server(self.on_connect, path=listen_address,
+                                                     loop=aio_loop))
+
+    async def on_connect(self, read_stream, write_stream):
+
+        while True:
+            try:
+                line = await read_stream.readline()
+                if line:
+                    self.handle_command(str(line.strip(), 'utf-8'), write_stream)
+                    if not write_stream.is_closing():
+                        await write_stream.drain()
+                else:
+                    write_stream.close()
+                    return
+            except UnicodeDecodeError as e:
+                logger.debug('invalid input utf8', e)
+            except Exception as e:
+                logger.warning('exception in API client', e)
+                write_stream.close()
+                return
+
+    def handle_command(self, line, write_stream):
+        words = line.split()
+        if len(words) == 0:
             return
 
-        words = line.split()
         command = words[0]
         args = words[1:]
         if command == 'probe':
@@ -896,19 +950,21 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
                 client.send_probe()
         elif command == 'clear':
             logger.debug('clearing list of known devices')
-            self.server.wsd_known_devices.clear()
+            self.known_devices.clear()
         elif command == 'list':
-            self.wfile.write(bytes(self.get_list_reply(), 'utf-8'))
+            write_stream.write(bytes(self.get_list_reply(), 'utf-8'))
+        elif command == 'quit':
+            write_stream.close()
         else:
             logger.debug('could not handle API request: {}'.format(line))
 
     def get_clients_by_interface(self, interface):
-        return [c for c in self.server.wsd_clients if c.mch.interface.name == interface or not interface]
+        return [c for c in self.clients if c.mch.interface.name == interface or not interface]
 
     def get_list_reply(self):
         retval = ''
-        for dev_uuid in self.server.wsd_known_devices:
-            dev = self.server.wsd_known_devices[dev_uuid]
+        for dev_uuid in self.known_devices:
+            dev = self.known_devices[dev_uuid]
             addrs_str = []
             for mci, addrs in dev.addresses.items():
                 addrs_str.append(', '.join(['{}%{}'.format(a, mci.interface.name) for a in addrs]))
@@ -920,29 +976,18 @@ class ApiRequestHandler(socketserver.StreamRequestHandler):
                 datetime.datetime.fromtimestamp(dev.last_seen).isoformat('T', 'seconds'),
                 ','.join(addrs_str))
 
+        retval += '.\n'
         return retval
 
-
-class ApiServer(object):
-
-    def __init__(self, selector, listen_address, clients, known_devices):
-        self.clients = clients
-
-        if isinstance(listen_address, int) or listen_address.isnumeric():
-            s_addr = ('localhost', int(listen_address))
-            socketserver.TCPServer.allow_reuse_address = True
-            s = socketserver.TCPServer(s_addr, ApiRequestHandler)
-        else:
-            s = socketserver.UnixStreamServer(listen_address, ApiRequestHandler)
-
-        # quiet hacky
-        s.wsd_clients = clients
-        s.wsd_known_devices = known_devices
-
-        selector.register(s.fileno(), selectors.EVENT_READ, s)
+    async def cleanup(self):
+        # ensure the server is not created after we have teared down
+        await self.create_task
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
 
 
-class NetworkInterface(object):
+class NetworkInterface:
 
     def __init__(self, name, scope):
         self.name = name
@@ -957,7 +1002,7 @@ class MetaEnumAfterInit(type):
         return obj
 
 
-class NetworkAddressMonitor(object, metaclass=MetaEnumAfterInit):
+class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     """
     Observes changes of network addresses, handles addition and removal of
     network addresses, and filters for addresses/interfaces that are or are not
@@ -965,9 +1010,9 @@ class NetworkAddressMonitor(object, metaclass=MetaEnumAfterInit):
     done in subclasses.
     """
 
-    def __init__(self, selector):
+    def __init__(self, aio_loop):
         self.interfaces = {}
-        self.selector = selector
+        self.aio_loop = aio_loop
 
         self.clients = []
         self.hosts = []
@@ -1037,7 +1082,7 @@ class NetworkAddressMonitor(object, metaclass=MetaEnumAfterInit):
 
         logger.debug('handling traffic for {} on {}'.format(
             addr, interface.name))
-        mch = MulticastHandler(addr_family, addr, interface, self.selector)
+        mch = MulticastHandler(addr_family, addr, interface, self.aio_loop)
         self.mchs.append(mch)
 
         if not args.no_host:
@@ -1045,7 +1090,7 @@ class NetworkAddressMonitor(object, metaclass=MetaEnumAfterInit):
             self.hosts.append(h)
             if not args.no_http:
                 self.http_servers.append(WSDHttpServer(
-                    mch, WSDHttpRequestHandler, mch.family, self.selector))
+                    mch, WSDHttpRequestHandler, mch.family, self.aio_loop))
 
         if args.discovery:
             client = WSDClient(mch, self.known_devices)
@@ -1084,13 +1129,19 @@ class NetworkAddressMonitor(object, metaclass=MetaEnumAfterInit):
 
     def cleanup(self):
 
+        pending_tasks = []
         for h in self.hosts:
             h.teardown()
             h.cleanup()
+            pending_tasks.extend(h.pending_tasks)
 
         for c in self.clients:
             c.teardown()
             c.cleanup()
+            pending_tasks.extend(c.pending_tasks)
+
+        # Wait here for all pending tasks so that the main loop can be finished on termination.
+        asyncio.get_event_loop().run_until_complete(asyncio.gather(*pending_tasks))
 
     def get_mch_by_address(self, family, address, interface):
         """
@@ -1151,8 +1202,8 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
     RTM_DELADDR = 21
     RTM_GETADDR = 22
 
-    def __init__(self, selector):
-        super().__init__(selector)
+    def __init__(self, aio_loop):
+        super().__init__(aio_loop)
 
         rtm_groups = RTMGRP_LINK
         if not args.ipv4only:
@@ -1162,7 +1213,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
         self.socket.bind((0, rtm_groups))
-        self.selector.register(self.socket, selectors.EVENT_READ, self)
+        self.aio_loop.add_reader(self.socket.fileno(), self.handle_request)
 
     def enumerate(self):
         super().enumerate()
@@ -1237,7 +1288,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
             offset += align_to(msg_len, NLM_HDR_ALIGNTO)
 
     def cleanup(self):
-        self.selector.unregister(self.socket)
+        self.aio_loop.remove_reader(self.socket.fileno())
         self.socket.close()
         super().cleanup()
 
@@ -1279,7 +1330,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         # Do this before fetching the current routing information to avoid
         # race condition.
         self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
-        self.selector.register(self.socket, selectors.EVENT_READ, self)
+        self.aio_loop.add_reader(self.socket.fileno(), self.handle_request)
 
     def enumerate(self):
         super().enumerate()
@@ -1384,16 +1435,15 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         return intf
 
     def cleanup(self):
-        self.selector.unregister(self.socket)
+        self.aio_loop.remove_reader(self.socket.fileno())
         self.socket.close()
         super().cleanup()
 
 
-def sigterm_handler(signum, frame):
-    if signum == signal.SIGTERM:
-        logger.info('received SIGTERM, tearing down')
-        # implictely raise SystemExit to cleanup properly
-        sys.exit(0)
+def sigterm_handler():
+    logger.info('received termination/interrupt signal, tearing down')
+    # implictely raise SystemExit to cleanup properly
+    sys.exit(0)
 
 
 def parse_args():
@@ -1485,6 +1535,8 @@ def parse_args():
         log_level = logging.INFO
     elif args.verbose > 1:
         log_level = logging.DEBUG
+        asyncio.get_event_loop.aio_loop.set_debug(True)
+        logging.getLogger("asyncio").setLevel(logging.DEBUG)
     else:
         log_level = logging.WARNING
 
@@ -1508,44 +1560,6 @@ def parse_args():
 
     for prefix, uri in namespaces.items():
         ElementTree.register_namespace(prefix, uri)
-
-
-def send_outstanding_messages(block=False):
-    """
-    Send all queued datagrams for which the timeout has been reached. If block
-    is true then all queued messages will be sent but with their according
-    delay.
-    """
-    if len(send_queue) == 0:
-        return None
-
-    # reverse ordering for faster removal of the last element
-    send_queue.sort(key=lambda x: x[0], reverse=True)
-
-    # Emit every message that is "too late". Note that in case the system
-    # time jumps forward, multiple outstanding message which have a
-    # delay between them are sent out without that delay.
-    now = time.time()
-    while len(send_queue) > 0 and (send_queue[-1][0] <= now or block):
-        mch = send_queue[-1][1]
-        addr = send_queue[-1][2]
-        msg = send_queue[-1][3]
-        try:
-            mch.send(msg, addr)
-        except Exception as e:
-            logger.error('error while sending packet on {}: {}'.format(mch.interface.name, e))
-
-        del send_queue[-1]
-        if block and len(send_queue) > 0:
-            delay = send_queue[-1][0] - now
-            if delay > 0:
-                time.sleep(delay)
-                now = time.time()
-
-    if len(send_queue) > 0 and not block:
-        return send_queue[-1][0] - now
-
-    return None
 
 
 def chroot(root):
@@ -1618,16 +1632,17 @@ def main():
         logger.error('Listening to no IP address family.')
         return 4
 
-    s = selectors.DefaultSelector()
+    aio_loop = asyncio.get_event_loop()
     if platform.system() == 'Linux':
-        nm = NetlinkAddressMonitor(s)
+        nm = NetlinkAddressMonitor(aio_loop)
     elif platform.system() == 'FreeBSD':
-        nm = RouteSocketAddressMonitor(s)
+        nm = RouteSocketAddressMonitor(aio_loop)
     else:
         raise NotImplementedError('unsupported OS')
 
+    api_server = None
     if args.listen:
-        ApiServer(s, args.listen, nm.clients, nm.known_devices)
+        api_server = ApiServer(aio_loop, args.listen, nm.clients, nm.known_devices)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:
@@ -1647,29 +1662,20 @@ def main():
         logger.warning('chrooted but running as root, consider -u option')
 
     # main loop, serve requests coming from any outbound socket
-    signal.signal(signal.SIGTERM, sigterm_handler)
+    aio_loop.add_signal_handler(signal.SIGINT, sigterm_handler)
+    aio_loop.add_signal_handler(signal.SIGTERM, sigterm_handler)
     try:
-        while True:
-            try:
-                timeout = send_outstanding_messages()
-                events = s.select(timeout)
-                for key, mask in events:
-                    if isinstance(key.data, MulticastHandler):
-                        key.data.handle_request(key)
-                    else:
-                        key.data.handle_request()
-            except (SystemExit, KeyboardInterrupt):
-                # silently exit the loop
-                logger.debug('got termination signal')
-                break
-            except Exception:
-                logger.exception('error in main loop')
-    finally:
+        aio_loop.run_forever()
+    except (SystemExit, KeyboardInterrupt):
         logger.info('shutting down gracefully...')
+        if api_server is not None:
+            aio_loop.run_until_complete(api_server.cleanup())
 
-    nm.cleanup()
+        nm.cleanup()
+        aio_loop.stop()
+    except Exception:
+        logger.exception('error in main loop')
 
-    send_outstanding_messages(True)
     logger.info('Done.')
     return 0
 

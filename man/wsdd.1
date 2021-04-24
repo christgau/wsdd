@@ -158,11 +158,13 @@ the local host only. The following commands can be issued:
 Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
 WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
 A Probe messages initiates the discovery message flow. It may take some time for
-hosts to be actually discovered.
+hosts to be actually discovered. This command does not return any data.
 .SS list - List discovered devices
 \fBlist\fR
 
-Returns a tab-separated list of discovered devices with the following information:
+Returns a tab-separated list of discovered devices with the following information.
+The possibly empty list of detected hosts is always terminated with a single
+dot ('.') in an otherwise empty line.
 .TP
 UUID
 UUID of the discovered device. Note that a multi-homed device should appear
@@ -187,10 +189,10 @@ process delimited by commas.  Addresses are provided along with the interface
 (separated by '%') on which they were discovered.  IPv6 addresses are reported
 on square brackets. Note that the reported addresses may not match the actual
 device on which the device may be reached.
-.SS clear - Clear list of discovered devices \fBclear\fR
 
+.SS clear - Clear list of discovered devices \fBclear\fR
 Clears the list of all discovered devices. Use the \fBprobe\fR command to search
-for devices again.
+for devices again. This command does not return any data.
 .SH SECURITY
 .PP
 wsdd does not implement any security feature, e.g. by using TLS for the http
