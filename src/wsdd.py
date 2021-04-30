@@ -29,7 +29,6 @@ import http
 import http.server
 import urllib.request
 import urllib.parse
-import socketserver
 import os
 import pwd
 import grp
@@ -89,13 +88,13 @@ class MulticastHandler:
         self.aio_loop.add_reader(self.uc_send_socket.fileno(), self.handle_request, self.uc_send_socket)
 
     def cleanup(self):
-        self.aio_loop.unregister(self.recv_socket)
-        self.aio_loop.unregister(self.mc_send_socket)
-        self.aio_loop.unregister(self.uc_send_socket)
+        self.aio_loop.remove_reader(self.recv_socket)
+        self.aio_loop.remove_reader(self.mc_send_socket)
+        self.aio_loop.remove_reader(self.uc_send_socket)
 
         self.recv_socket.close()
-        self.uc_send_socket.close()
         self.mc_send_socket.close()
+        self.uc_send_socket.close()
 
     def handles(self, family, addr, interface):
         return self.family == family and self.address == addr and self.interface.name == interface.name
@@ -468,6 +467,9 @@ class WSDUDPMessageHandler(WSDMessageHandler):
 
 class WSDDiscoveredDevice:
 
+    # a dict of discovered devices with their UUID as key
+    instances = {}
+
     def __init__(self, xml_str, xaddr, interface):
         self.last_seen = None
         self.addresses = {}
@@ -536,14 +538,17 @@ class WSDDiscoveredDevice:
 
 class WSDClient(WSDUDPMessageHandler):
 
-    def __init__(self, mch, known_devices):
+    instances = []
+
+    def __init__(self, mch):
         super().__init__(mch)
+
+        WSDClient.instances.append(self)
 
         self.mch.add_handler(self.mch.mc_send_socket, self)
         self.mch.add_handler(self.mch.recv_socket, self)
 
         self.probes = {}
-        self.known_devices = known_devices
 
         self.handlers[WSD_HELLO] = self.handle_hello
         self.handlers[WSD_BYE] = self.handle_bye
@@ -555,6 +560,9 @@ class WSDClient(WSDUDPMessageHandler):
         self.send_probe()
 
     def cleanup(self):
+        super().cleanup()
+        WSDClient.instances.remove(self)
+
         self.mch.remove_handler(self.mch.mc_send_socket, self)
         self.mch.remove_handler(self.mch.recv_socket, self)
 
@@ -593,8 +601,8 @@ class WSDClient(WSDUDPMessageHandler):
         bye_path = 'wsd:Bye'
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
         device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in self.known_devices:
-            del(self.known_devices[device_uuid])
+        if device_uuid in WSDDiscoveredDevice.instances:
+            del(WSDDiscoveredDevice.instances[device_uuid])
 
     def handle_probe_match(self, header, body):
         # do not handle to probematches issued not sent by ourself
@@ -672,10 +680,10 @@ class WSDClient(WSDUDPMessageHandler):
 
     def handle_metadata(self, meta, endpoint, xaddr):
         device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in self.known_devices:
-            self.known_devices[device_uuid].update(meta, xaddr, self.mch)
+        if device_uuid in WSDDiscoveredDevice.instances:
+            WSDDiscoveredDevice.instances[device_uuid].update(meta, xaddr, self.mch)
         else:
-            self.known_devices[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch)
+            WSDDiscoveredDevice.instances[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch)
 
     def remove_outdated_probes(self):
         cut = time.time() - PROBE_TIMEOUT * 2
@@ -697,9 +705,12 @@ class WSDHost(WSDUDPMessageHandler):
     """Class for handling WSD requests coming from UDP datagrams."""
 
     message_number = 0
+    instances = []
 
     def __init__(self, mch):
         super().__init__(mch)
+
+        WSDHost.instances.append(self)
 
         self.mch.add_handler(self.mch.recv_socket, self)
 
@@ -707,6 +718,10 @@ class WSDHost(WSDUDPMessageHandler):
         self.handlers[WSD_RESOLVE] = self.handle_resolve
 
         self.send_hello()
+
+    def cleanup(self):
+        super().cleanup()
+        WSDHost.instances.remove(self)
 
     def teardown(self):
         super().teardown()
@@ -899,10 +914,9 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
 class ApiServer:
 
-    def __init__(self, aio_loop, listen_address, clients, known_devices):
-        self.clients = clients
-        self.known_devices = known_devices
+    def __init__(self, aio_loop, listen_address, address_monitor):
         self.server = None
+        self.address_monitor = address_monitor
 
         # defer server creation
         self.create_task = aio_loop.create_task(self.create_server(aio_loop, listen_address))
@@ -950,7 +964,6 @@ class ApiServer:
                 client.send_probe()
         elif command == 'clear':
             logger.debug('clearing list of known devices')
-            self.known_devices.clear()
         elif command == 'list':
             write_stream.write(bytes(self.get_list_reply(), 'utf-8'))
         elif command == 'quit':
@@ -959,12 +972,11 @@ class ApiServer:
             logger.debug('could not handle API request: {}'.format(line))
 
     def get_clients_by_interface(self, interface):
-        return [c for c in self.clients if c.mch.interface.name == interface or not interface]
+        return [c for c in WSDClient.instances if c.mch.interface.name == interface or not interface]
 
     def get_list_reply(self):
         retval = ''
-        for dev_uuid in self.known_devices:
-            dev = self.known_devices[dev_uuid]
+        for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
             addrs_str = []
             for mci, addrs in dev.addresses.items():
                 addrs_str.append(', '.join(['{}%{}'.format(a, mci.interface.name) for a in addrs]))
@@ -1007,24 +1019,39 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     Observes changes of network addresses, handles addition and removal of
     network addresses, and filters for addresses/interfaces that are or are not
     handled. The actual OS-specific implementation that detects the changes is
-    done in subclasses.
+    done in subclasses. This class is used as a singleton
     """
 
+    instance = None
+
     def __init__(self, aio_loop):
+
+        if NetworkAddressMonitor.instance is not None:
+            raise RuntimeError('Instance of NetworkAddressMonitor already created')
+
+        NetworkAddressMonitor.instance = self
+
         self.interfaces = {}
         self.aio_loop = aio_loop
 
-        self.clients = []
-        self.hosts = []
         self.mchs = []
         self.http_servers = []
-        self.known_devices = {}
+        self.teardown_tasks = []
+
+        self.active = False
 
     def enumerate(self):
         """
         Performs an initial enumeration of addresses and sets up everything
         for observing future changes.
         """
+        if self.active:
+            return
+
+        self.active = True
+        self.do_enumerate()
+
+    def do_enumerate(self):
         pass
 
     def handle_request(self):
@@ -1044,6 +1071,11 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         Check if we should handle that address.
         Address must be provided as raw address, i.e. byte array
         """
+        # do not handle anything when we are not active
+        if not self.active:
+            return False
+
+        # filter out address families we are not interested in
         if args.ipv4only and addr_family != socket.AF_INET:
             return False
         if args.ipv6only and addr_family != socket.AF_INET6:
@@ -1075,7 +1107,6 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         # filter out what is not wanted
         # Ignore addresses or interfaces we already handle. There can only be
         # one multicast handler per address family and network interface
-        # However, multiple link-local addresses can be
         for mch in self.mchs:
             if mch.handles(addr_family, addr, interface):
                 return
@@ -1086,15 +1117,13 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         self.mchs.append(mch)
 
         if not args.no_host:
-            h = WSDHost(mch)
-            self.hosts.append(h)
+            WSDHost(mch)
             if not args.no_http:
                 self.http_servers.append(WSDHttpServer(
                     mch, WSDHttpRequestHandler, mch.family, self.aio_loop))
 
         if args.discovery:
-            client = WSDClient(mch, self.known_devices)
-            self.clients.append(client)
+            WSDClient(mch)
 
     def handle_deleted_address(self, raw_addr, addr_family, interface):
         addr = socket.inet_ntop(addr_family, raw_addr)
@@ -1109,15 +1138,13 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
 
         # Do not tear the client/hosts down. Saying goodbye does not work
         # because the address is already gone (at least on Linux).
-        for c in self.clients:
+        for c in WSDClient.instances:
             if c.mch == mch:
                 c.cleanup()
-                self.clients.remove(c)
                 break
-        for h in self.hosts:
+        for h in WSDHost.instances:
             if h.mch == mch:
                 h.cleanup()
-                self.hosts.remove(h)
                 break
         for s in self.http_servers:
             if s.mch == mch:
@@ -1127,21 +1154,50 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         mch.cleanup()
         self.mchs.remove(mch)
 
-    def cleanup(self):
+    def teardown(self):
+        if not self.active:
+            return
 
-        pending_tasks = []
-        for h in self.hosts:
+        self.active = False
+
+        # return if we are still in tear down process
+        if len(self.teardown_tasks) > 0:
+            return
+
+        for h in WSDHost.instances:
             h.teardown()
             h.cleanup()
-            pending_tasks.extend(h.pending_tasks)
+            self.teardown_tasks.extend(h.pending_tasks)
 
-        for c in self.clients:
+        for c in WSDClient.instances:
             c.teardown()
             c.cleanup()
-            pending_tasks.extend(c.pending_tasks)
+            self.teardown_tasks.extend(c.pending_tasks)
 
-        # Wait here for all pending tasks so that the main loop can be finished on termination.
-        asyncio.get_event_loop().run_until_complete(asyncio.gather(*pending_tasks))
+        for s in self.http_servers:
+            s.server_close()
+
+        self.http_servers.clear()
+
+        if not self.aio_loop.is_running():
+            # Wait here for all pending tasks so that the main loop can be finished on termination.
+            self.aio_loop.run_until_complete(asyncio.gather(*self.teardown_tasks))
+        else:
+            for t in self.teardown_tasks:
+                t.add_done_callback(self.mch_teardown)
+
+    def mch_teardown(self, task):
+        if any([not t.done() for t in self.teardown_tasks]):
+            return
+
+        self.teardown_tasks.clear()
+
+        for mch in self.mchs:
+            mch.cleanup()
+        self.mchs.clear()
+
+    def cleanup(self):
+        self.teardown()
 
     def get_mch_by_address(self, family, address, interface):
         """
@@ -1215,8 +1271,8 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
         self.socket.bind((0, rtm_groups))
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_request)
 
-    def enumerate(self):
-        super().enumerate()
+    def do_enumerate(self):
+        super().do_enumerate()
 
         kernel = (0, 0)
         req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, self.RTM_GETADDR,
@@ -1332,8 +1388,8 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_request)
 
-    def enumerate(self):
-        super().enumerate()
+    def do_enumerate(self):
+        super().do_enumerate()
         mib = [CTL_NET, socket.AF_ROUTE, 0, 0, NET_RT_IFLIST, 0]
         rt_mib = (ctypes.c_int * len(mib))()
         rt_mib[:] = mib[:]
@@ -1642,7 +1698,7 @@ def main():
 
     api_server = None
     if args.listen:
-        api_server = ApiServer(aio_loop, args.listen, nm.clients, nm.known_devices)
+        api_server = ApiServer(aio_loop, args.listen, nm)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:
