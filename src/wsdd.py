@@ -593,7 +593,20 @@ class WSDClient(WSDUDPMessageHandler):
             self.enqueue_datagram(msg)
             return
 
-        xaddr = xaddrs.strip()
+        xaddr = None
+        for addr in xaddrs.strip().split():
+            if (self.mch.family == socket.AF_INET6) and ('//[fe80::' in addr):
+                # use first link-local address for IPv6
+                xaddr = addr
+                break
+            elif self.mch.family == socket.AF_INET:
+                # use first (and very likely the only) IPv4 address
+                xaddr = addr
+                break
+
+        if xaddr is None:
+            return
+
         logger.info('Hello from {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
 
