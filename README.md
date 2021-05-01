@@ -132,6 +132,11 @@ below for details.
      Restrict to the given address family. If both options are specified no
      addreses will be available and wsdd will exit.
 
+ * `-A`, `--no-autostart`
+     Do not start networking activities automatically when the program is started.
+	 The API interface (see man page) can be used to start and stop the
+	 networking activities while the application is running.
+
  * `-c DIRECTORY`, `--chroot DIRECTORY`
 
      Chroot into a separate directory to prevent access to other directories of
@@ -155,6 +160,11 @@ below for details.
 
      This option also accepts IP addresses that the service should bind to.
      For IPv6, only link local addresses are actually considered as noted above.
+
+ * `-l PATH/PORT`, `--listen PATH/PORT`
+	 Enable the API server on the with a Unix domain socket on the given PATH
+	 or a local TCP socket bound to the given PORT. Refer to the man page for
+	 details on the API.
 
  * `-s`, `--shortlog`
 
@@ -241,8 +251,6 @@ This mode allows to search for other WSD-compatible devices.
 	 are printed to stdout with INFO priority. The server interface (see `-l`
 	 option) can be used for a programatic interface. Refer to the man page for
 	 details of the API.
-
- * `-l PATH/PORT`, `--listen PATH/PORT`
 
 
 ## Example Usage

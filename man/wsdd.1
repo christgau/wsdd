@@ -24,6 +24,11 @@ See below.
 Restrict to the given address family. If both options are specified no
 addreses will be available and wsdd will exit.
 .TP
+\fB\-A\fR, \fB\-\-no-autostart\fR
+Do not start networking activities automatically when the program is started.
+The API interface (see below) can be used to start and stop the networking
+activities while the application is running.
+.TP
 \fB\-c \fIDIRECTORY\fR, \fB\-\-chroot \fIDIRECTORY\fR
 chroot into the given \fIDIRECTORY\fR after initialization has been performed
 and right before the handling of incoming messages starts. The new root directory
@@ -147,24 +152,19 @@ Traffic for the following ports, directions and addresses must be allowed:
 .PP
 You should further restrict the traffic to the (link-)local subnet, e.g. by
 using the `fe80::/10` address space for IPv6.
-.SH SERVER INTERFACE
-When the discovery mode is used, wsdd provides a text-based line-oriented
-server interface to query information and trigger actions. The interface can be
-used with TCP and UNIX domain sockets (see above). The TCP socket is bound to
-the local host only. The following commands can be issued:
-.SS probe - Search for devices
-\fBprobe \fI[INTERFACE]\fR
-
-Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
-WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
-A Probe messages initiates the discovery message flow. It may take some time for
-hosts to be actually discovered. This command does not return any data.
-.SS list - List discovered devices
-\fBlist\fR
-
+.SH API INTERFACE
+Wsdd provides a text-based, line-oriented API interface to query information
+and trigger actions. The interface can be used with TCP and UNIX domain sockets
+(see \fB\-l/\-\-listen\fR option). The TCP socket is bound to the local host
+only. The following commands can be issued:
+.SS \fBclear\fR - Clear list of discovered devices
+Clears the list of all discovered devices. Use the \fBprobe\fR command to
+search for devices again. This command does not return any data and is only
+available in discover mode.
+.SS \fBlist\fR - List discovered devices
 Returns a tab-separated list of discovered devices with the following information.
 The possibly empty list of detected hosts is always terminated with a single
-dot ('.') in an otherwise empty line.
+dot ('.') in an otherwise empty line. This command is only available in discover mode.
 .TP
 UUID
 UUID of the discovered device. Note that a multi-homed device should appear
@@ -189,10 +189,24 @@ process delimited by commas.  Addresses are provided along with the interface
 (separated by '%') on which they were discovered.  IPv6 addresses are reported
 on square brackets. Note that the reported addresses may not match the actual
 device on which the device may be reached.
+.SS \fBprobe \fI[INTERFACE]\fR - Search for devices
+Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
+WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
+A Probe messages initiates the discovery message flow. It may take some time for
+hosts to be actually discovered. This command does not return any data and is
+only available in discovery mode.
+.SS \fBstart\fR - Start networking activities
+This command starts the networking acitivies of wsdd if they haven't been
+started yet. "Hello" messages are emitted and the host is announced on the
+network(s) when the host mode is active. If the discovery mode is enabled a
+probe process is also started.
 
-.SS clear - Clear list of discovered devices \fBclear\fR
-Clears the list of all discovered devices. Use the \fBprobe\fR command to search
-for devices again. This command does not return any data.
+.SS \fBstop\fR - Stop networking activities
+This is the reverse operation to start. When this command is received, "Bye"
+messages are sent in order to notify hosts in the network about the host's
+disappearance. All networking sockets used for the WSD protocol are closed as
+well. Activities can be restarted with the start operation.
+
 .SH SECURITY
 .PP
 wsdd does not implement any security feature, e.g. by using TLS for the http

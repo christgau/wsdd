@@ -956,18 +956,23 @@ class ApiServer:
             return
 
         command = words[0]
-        args = words[1:]
-        if command == 'probe':
-            intf = args[0] if args else None
+        command_args = words[1:]
+        if command_args == 'probe' and args.discovery:
+            intf = command_args[0] if command_args else None
             logger.debug('probing devices on {} upon request'.format(intf))
             for client in self.get_clients_by_interface(intf):
                 client.send_probe()
-        elif command == 'clear':
+        elif command == 'clear' and args.discovery:
             logger.debug('clearing list of known devices')
-        elif command == 'list':
+            WSDDiscoveredDevice.instances.clear()
+        elif command == 'list' and args.discovery:
             write_stream.write(bytes(self.get_list_reply(), 'utf-8'))
         elif command == 'quit':
             write_stream.close()
+        elif command == 'start':
+            self.address_monitor.enumerate()
+        elif command == 'stop':
+            self.address_monitor.teardown()
         else:
             logger.debug('could not handle API request: {}'.format(line))
 
@@ -1008,9 +1013,10 @@ class NetworkInterface:
 
 class MetaEnumAfterInit(type):
 
-    def __call__(cls, *args, **kwargs):
-        obj = super().__call__(*args, **kwargs)
-        obj.enumerate()
+    def __call__(cls, *cargs, **kwargs):
+        obj = super().__call__(*cargs, **kwargs)
+        if not args.no_autostart:
+            obj.enumerate()
         return obj
 
 
@@ -1537,6 +1543,10 @@ def parse_args():
         help='set workgroup name (default WORKGROUP)',
         default='WORKGROUP')
     parser.add_argument(
+        '-A', '--no-autostart',
+        help='do not start networking after launch',
+        action='store_true')
+    parser.add_argument(
         '-t', '--no-http',
         help='disable http service (for debugging, e.g.)',
         action='store_true')
@@ -1676,13 +1686,6 @@ def drop_privileges(uid, gid):
 
 def main():
     parse_args()
-
-    if not args.discovery and args.listen:
-        logger.warning('Listen option ignored since discovery is disabled.')
-    elif args.discovery and not args.listen:
-        logger.warning('Discovery enabled but no listen option provided. '
-                       'Falling back to port {}'.format(WSDD_LISTEN_PORT))
-        args.listen = WSDD_LISTEN_PORT
 
     if args.ipv4only and args.ipv6only:
         logger.error('Listening to no IP address family.')
