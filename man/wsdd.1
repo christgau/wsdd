@@ -144,14 +144,15 @@ domain socket to which a client can connect to.
 .PP
 Traffic for the following ports, directions and addresses must be allowed:
 .TP
-- Incoming and outgoing traffic to udp/3702 with multicast source/destination: 239.255.255.250 for IPv4 and ff02::c for IPv6
+- Incoming and outgoing traffic to udp/3702 with multicast destination: 239.255.255.250 for IPv4 and ff02::c for IPv6
 .TP
 - Outgoing unicast traffic from udp/3702
 .TP
 - Incoming traffic to tcp/5357
 .PP
 You should further restrict the traffic to the (link-)local subnet, e.g. by
-using the `fe80::/10` address space for IPv6.
+using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
+must be enabled in order to get IPv4 multicast traffic working.
 .SH API INTERFACE
 Wsdd provides a text-based, line-oriented API interface to query information
 and trigger actions. The interface can be used with TCP and UNIX domain sockets
