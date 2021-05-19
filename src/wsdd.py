@@ -1626,7 +1626,7 @@ def parse_args():
         log_level = logging.INFO
     elif args.verbose > 1:
         log_level = logging.DEBUG
-        asyncio.get_event_loop.aio_loop.set_debug(True)
+        asyncio.get_event_loop().set_debug(True)
         logging.getLogger("asyncio").setLevel(logging.DEBUG)
     else:
         log_level = logging.WARNING
