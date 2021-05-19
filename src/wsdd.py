@@ -1326,12 +1326,16 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
+            logger.debug('RTM new/del addr family: {} flags: {} scope: {} idx: {}'.format(
+                         ifa_family, ifa_flags, ifa_scope, ifa_idx))
             addr = None
             i = offset + IFA_MSG_LEN
             while i - offset < msg_len:
                 attr_len, attr_type = struct.unpack_from('HH', buf, i)
+                logger.debug('rt_attr {} {}'.format(attr_len, attr_type))
 
                 if attr_len < RTA_LEN:
+                    logger.debug('invalid rtm_attr_len. skipping remainder')
                     break
 
                 if attr_type == IFA_LABEL:
@@ -1344,10 +1348,9 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 elif attr_type == IFA_FLAGS:
                     _, ifa_flags = struct.unpack_from('HI', buf, i)
                 i += align_to(attr_len, RTA_ALIGNTO)
-                logger.debug('rt_attr {} {}'.format(attr_len, attr_type))
 
             if addr is None:
-                logger.debug('not address in RTM message')
+                logger.debug('no address in RTM message')
                 offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
@@ -1355,9 +1358,11 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
             # message. Therefore, the name is requested by other means (#94)
             if ifa_idx not in self.interfaces:
                 try:
+                    logger.debug('unknown interface name for idx {}. resolving manually'.format(ifa_idx))
                     if_name = socket.if_indextoname(ifa_idx)
                     self.add_interface(if_name, ifa_idx, ifa_scope)
                 except OSError:
+                    logger.exception('interface detection failed')
                     # accept this exception (which should not occur)
                     pass
 
