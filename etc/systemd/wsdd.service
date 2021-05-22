@@ -8,13 +8,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/wsdd --shortlog
+; The service is put into an empty runtime directory chroot,
+; i.e. the runtime directory which usually resides under /run
+ExecStart=/usr/bin/wsdd --shortlog --chroot=/run/wsdd
 DynamicUser=yes
-; The following lines can be used for a chroot execution of wsdd.
-; Also append '--chroot /run/wsdd/chroot' to ExecStart to enable chrooting
-;AmbientCapabilities=CAP_SYS_CHROOT
-;ExecStartPre=/usr/bin/install -d -o nobody -g nobody -m 0700 /run/wsdd/chroot
-;ExecStopPost=rmdir /run/wsdd/chroot
+User=wsdd
+Group=wsdd
+RuntimeDirectory=wsdd
+AmbientCapabilities=CAP_SYS_CHROOT
 
 [Install]
 WantedBy=multi-user.target
