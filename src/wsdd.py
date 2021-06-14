@@ -34,6 +34,13 @@ import pwd
 import grp
 import datetime
 
+# try to load more secure XML module first, fallback to default if not present
+try:
+    from defusedxml.ElementTree import fromstring as ETfromString
+except ModuleNotFoundError:
+    from xml.etree.ElementTree import fromstring as ETfromString
+
+
 WSDD_VERSION = '0.6.4'
 
 
@@ -351,8 +358,15 @@ class WSDMessageHandler:
         """
         handle a WSD message that might be received by a MulticastHandler
         """
-        tree = ElementTree.fromstring(msg)
+        try:
+            tree = ETfromString(msg)
+        except ElementTree.ParseError:
+            return None
+
         header = tree.find('./soap:Header', namespaces)
+        if header is None:
+            return None
+
         msg_id_tag = header.find('./wsa:MessageID', namespaces)
         if msg_id_tag is None:
             return None
@@ -479,7 +493,10 @@ class WSDDiscoveredDevice:
         self.update(xml_str, xaddr, interface)
 
     def update(self, xml_str, xaddr, interface):
-        tree = ElementTree.fromstring(xml_str)
+        try:
+            tree = ETfromString(xml_str)
+        except ElementTree.ParseError:
+            return None
         mds_path = 'soap:Body/wsx:Metadata/wsx:MetadataSection'
         sections = tree.findall(mds_path, namespaces)
         for section in sections:
@@ -767,6 +784,9 @@ class WSDHost(WSDUDPMessageHandler):
 
     def handle_probe(self, header, body):
         probe = body.find('./wsd:Probe', namespaces)
+        if probe is None:
+            return None
+
         scopes = probe.find('./wsd:Scopes', namespaces)
 
         if scopes:
@@ -794,6 +814,9 @@ class WSDHost(WSDUDPMessageHandler):
 
     def handle_resolve(self, header, body):
         resolve = body.find('./wsd:Resolve', namespaces)
+        if resolve is None:
+            return None
+
         addr = resolve.find('./wsa:EndpointReference/wsa:Address', namespaces)
         if addr is None:
             logger.debug('invalid resolve request: missing endpoint address')
