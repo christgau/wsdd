@@ -993,7 +993,7 @@ class ApiServer:
 
         command = words[0]
         command_args = words[1:]
-        if command_args == 'probe' and args.discovery:
+        if command == 'probe' and args.discovery:
             intf = command_args[0] if command_args else None
             logger.debug('probing devices on {} upon request'.format(intf))
             for client in self.get_clients_by_interface(intf):
