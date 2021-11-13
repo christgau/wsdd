@@ -515,18 +515,21 @@ class WSDDiscoveredDevice:
 
         url = urllib.parse.urlparse(xaddr)
         addr, _, _ = url.netloc.rpartition(':')
+        report = True
         if interface not in self.addresses:
             self.addresses[interface] = set([addr])
         else:
-            self.addresses[interface].add(addr)
+            if addr not in self.addresses[interface]:
+                self.addresses[interface].add(addr)
+            else:
+                report = False
 
         self.last_seen = time.time()
-        if ('DisplayName' in self.props) and ('BelongsTo' in self.props):
+        if ('DisplayName' in self.props) and ('BelongsTo' in self.props) and (report):
             self.display_name = self.props['DisplayName']
-            logger.info('discovered {} in {} on {}%{}'.format(
-                self.display_name, self.props['BelongsTo'], addr,
-                interface.interface.name))
-        elif 'FriendlyName' in self.props:
+            logger.info('discovered {} in {} on {}%{}'.format(self.display_name, self.props['BelongsTo'], addr,
+                        interface.interface.name))
+        elif ('FriendlyName' in self.props) and (report):
             self.display_name = self.props['FriendlyName']
             logger.info('discovered {} on {}%{}'.format(self.display_name, addr, interface.interface.name))
 

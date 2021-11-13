@@ -6,6 +6,10 @@
 
 - Re-enable 'probe' command of API (#116)
 
+### Changed
+
+- Log device discovery only once per address and interface
+
 ## [0.6.4] - 2021-02-06
 
 ### Added
