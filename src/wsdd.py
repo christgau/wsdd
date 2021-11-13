@@ -1744,7 +1744,7 @@ def main():
         logger.error('Listening to no IP address family.')
         return 4
 
-    aio_loop = asyncio.get_event_loop()
+    aio_loop = asyncio.new_event_loop()
     if platform.system() == 'Linux':
         nm = NetlinkAddressMonitor(aio_loop)
     elif platform.system() == 'FreeBSD':
