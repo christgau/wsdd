@@ -1,13 +1,25 @@
 # Changelog
 
-## Unreleased
+## [0.7.0] - 2021-11-20
+
+### Added
+
+- Using the server interface it is now possible to start and stop the host functionality (discoverable device) without terminating and restarting the daemon.
 
 ### Fixed
 
+- Support multiple IP addresses in 'hello' messages from other hosts (#89)
+- Support interfaces with IPv6-only configuration (#94)
 - Re-enable 'probe' command of API (#116)
+- Removed code marked as deprecated starting with Python 3.10.
 
 ### Changed
 
+- The example systemd unit file now uses `DynamicUser` instead of the unsafe nobody:nobody combination.
+  It also employs the rundir as chroot directory.
+- Code changed to use asyncio instead of selector-based
+- The server interface does not close connections after each command anymore.
+- For the 'list' command of the server interface, the list of discovered devices is terminated with a line containing only a single dot ('.')
 - Log device discovery only once per address and interface
 
 ## [0.6.4] - 2021-02-06

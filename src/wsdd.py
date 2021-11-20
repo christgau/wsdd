@@ -41,7 +41,7 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
 
-WSDD_VERSION = '0.6.4'
+WSDD_VERSION = '0.7.0'
 
 
 class MulticastHandler:
