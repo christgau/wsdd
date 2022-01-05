@@ -1843,6 +1843,15 @@ def drop_privileges(uid: int, gid: int) -> bool:
     return True
 
 
+def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> NetworkAddressMonitor:
+    if system == 'Linux':
+        return NetlinkAddressMonitor(aio_loop)
+    elif system == 'FreeBSD':
+        return RouteSocketAddressMonitor(aio_loop)
+    else:
+        raise NotImplementedError('unsupported OS')
+
+
 def main() -> int:
     parse_args()
 
@@ -1851,12 +1860,7 @@ def main() -> int:
         return 4
 
     aio_loop = asyncio.new_event_loop()
-    if platform.system() == 'Linux':
-        nm = NetlinkAddressMonitor(aio_loop)
-    elif platform.system() == 'FreeBSD':
-        nm = RouteSocketAddressMonitor(aio_loop)
-    else:
-        raise NotImplementedError('unsupported OS')
+    nm = create_address_monitor(platform.system(), aio_loop)
 
     api_server = None
     if args.listen:
