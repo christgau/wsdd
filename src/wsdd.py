@@ -46,6 +46,89 @@ except ModuleNotFoundError:
 WSDD_VERSION: str = '0.7.0'
 
 
+class NetworkInterface:
+
+    _name: str
+    _index: int
+    _scope: int
+
+    def __init__(self, name: str, scope: int, index: int = None) -> None:
+        self._name = name
+        self._scope = scope
+        if index is not None:
+            self._index = index
+        else:
+            self._index = socket.if_nametoindex(self._interface.name)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def scope(self) -> int:
+        return self._scope
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    def __str__(self) -> str:
+        return self._name
+
+    def __eq__(self, other) -> bool:
+        return self._name == other.name
+
+
+class NetworkAddress:
+
+    _family: int
+    _raw_address: bytes
+    _address_str: str
+    _interface: NetworkInterface
+
+    def __init__(self, family: int, raw: bytes, interface: NetworkInterface) -> None:
+        self._family = family
+        self._raw_address = raw
+        self._interface = interface
+
+        self._address_str = socket.inet_ntop(self._family, self._raw_address)
+
+    @property
+    def address_str(self):
+        return self._address_str
+
+    @property
+    def family(self):
+        return self._family
+
+    @property
+    def interface(self):
+        return self._interface
+
+    @property
+    def is_multicastable(self):
+        # Nah, this check is not optimal but there are no local flags for
+        # addresses, but it should be safe for IPv4 anyways
+        # (https://tools.ietf.org/html/rfc5735#page-3)
+        return ((self._family == socket.AF_INET) and (self._raw_address[0] == 127)
+                or (self._family == socket.AF_INET6) and (self._raw_address[0:2] != b'\xfe\x80'))
+
+    @property
+    def raw(self):
+        return self._raw_address
+
+    @property
+    def transport_str(self):
+        """the string representation of the local address overridden in network setup (for IPv6)"""
+        return self._address_str if self._family == socket.AF_INET else '[{}]'.format(self._address_str)
+
+    def __str__(self) -> str:
+        return '{}%{}'.format(self._address_str, self._interface.name)
+
+    def __eq__(self, other) -> bool:
+        return (self._family == other.family and self.address == other.address and self.interface == other.interface)
+
+
 class MulticastHandler:
     """
     A class for handling multicast traffic on a given interface for a
@@ -53,9 +136,7 @@ class MulticastHandler:
     """
 
     # base interface addressing information
-    address: str
-    family: int
-    interface: str
+    address: NetworkAddress
 
     # individual interface-bound sockets for:
     #  - receiving multicast traffic
@@ -66,7 +147,6 @@ class MulticastHandler:
     uc_send_socket: socket.socket
 
     # addresses used for communication and data
-    transport_address: str
     multicast_address: tuple[int, ...]
     listen_address: tuple[int, ...]
     aio_loop: asyncio.AbstractEventLoop
@@ -74,19 +154,14 @@ class MulticastHandler:
     # dictionary that holds objects with a handle_request method for the sockets created above
     message_handlers: dict[socket.socket, object]
 
-    def __init__(self, family: int, address: str, interface: str, aio_loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, address: NetworkAddress, aio_loop: asyncio.AbstractEventLoop) -> None:
         self.address = address
-        self.family = family
-        self.interface = interface
 
-        self.recv_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+        self.recv_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.mc_send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
-        self.uc_send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+        self.mc_send_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
+        self.uc_send_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
         self.uc_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        # the string representation of the local address overridden in network setup (for IPv6)
-        self.transport_address = address
 
         # family-specific multicast address and local HTTP server (tuples)
         self.multicast_address = None
@@ -95,14 +170,13 @@ class MulticastHandler:
         self.message_handlers = {}
         self.aio_loop = aio_loop
 
-        if family == socket.AF_INET:
+        if self.address.family == socket.AF_INET:
             self.init_v4()
-        elif family == socket.AF_INET6:
+        elif self.address.family == socket.AF_INET6:
             self.init_v6()
 
-        logger.info('joined multicast group {0} on {2}%{1}'.format(self.multicast_address, self.interface.name,
-                    self.address))
-        logger.debug('transport address on {0} is {1}'.format(self.interface.name, self.transport_address))
+        logger.info('joined multicast group {0} on {1}'.format(self.multicast_address, self.address))
+        logger.debug('transport address on {0} is {1}'.format(self.address.interface.name, self.address.transport_str))
         logger.debug('will listen for HTTP traffic on address {0}'.format(self.listen_address))
 
         # register calbacks for incoming data (also for mc)
@@ -119,15 +193,15 @@ class MulticastHandler:
         self.mc_send_socket.close()
         self.uc_send_socket.close()
 
-    def handles(self, family: int, addr: bytes, interface: str) -> bool:
-        return self.family == family and self.address == addr and self.interface.name == interface.name
+    def handles_address(self, address: NetworkAddress) -> bool:
+        return self.address == address
 
     def init_v6(self) -> None:
-        idx = socket.if_nametoindex(self.interface.name)
+        idx = self.address.interface.index
         self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
 
         # v6: member_request = { multicast_addr, intf_idx }
-        mreq = (socket.inet_pton(self.family, WSD_MCAST_GRP_V6) + struct.pack('@I', idx))
+        mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V6) + struct.pack('@I', idx))
         self.recv_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
         self.recv_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
@@ -148,22 +222,20 @@ class MulticastHandler:
             self.recv_socket.bind(('::', 0, 0, idx))
 
         # bind unicast socket to interface address and WSD's udp port
-        self.uc_send_socket.bind((self.address, WSD_UDP_PORT, 0, idx))
+        self.uc_send_socket.bind((str(self.address), WSD_UDP_PORT, 0, idx))
 
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
 
-        self.transport_address = '[{0}]'.format(self.address)
-        self.listen_address = (self.address, WSD_HTTP_PORT, 0, idx)
+        self.listen_address = (self.address.address_str, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self) -> None:
-        idx = socket.if_nametoindex(self.interface.name)
+        idx = self.address.interface.index
         self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
-        mreq = (socket.inet_pton(self.family, WSD_MCAST_GRP_V4) + socket.inet_pton(self.family, self.address)
-                + struct.pack('@I', idx))
+        mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
         self.recv_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         if platform.system() == 'Linux':
@@ -176,13 +248,13 @@ class MulticastHandler:
             self.recv_socket.bind(('', WSD_UDP_PORT))
 
         # bind unicast socket to interface address and WSD's udp port
-        self.uc_send_socket.bind((self.address, WSD_UDP_PORT))
+        self.uc_send_socket.bind((self.address.address_str, WSD_UDP_PORT))
 
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
 
-        self.listen_address = (self.address, WSD_HTTP_PORT)
+        self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
 
     def add_handler(self, socket: socket.socket, handler: object) -> None:
         # try:
@@ -202,6 +274,7 @@ class MulticastHandler:
                 self.message_handlers[socket].remove(handler)
 
     def handle_request(self, key: socket.socket) -> None:
+        # TODO: refactor this
         s = None
         if key == self.uc_send_socket:
             s = self.uc_send_socket
@@ -289,7 +362,7 @@ wsd_instance_id: int = int(time.time())
 args = None
 logger: logging.Logger = None
 
-WSDMessage = tuple(ElementTree.Element, str)
+WSDMessage = tuple[ElementTree.Element, str]
 MessageTypeHandler = Callable[[ElementTree.Element, ElementTree.Element], WSDMessage]
 
 
@@ -410,7 +483,7 @@ class WSDMessageHandler:
 
         if mch:
             logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
-                src_address[0], src_address[1], mch.interface.name, action_method, msg_id))
+                src_address[0], src_address[1], mch.address.interface.name, action_method, msg_id))
         else:
             # http logging is already done by according server
             logger.debug('processing WSD {} message ({})'.format(action_method, msg_id))
@@ -472,14 +545,14 @@ class WSDUDPMessageHandler(WSDMessageHandler):
         try:
             self.mch.send(msg, dst)
         except Exception as e:
-            logger.error('error while sending packet on {}: {}'.format(self.mch.interface.name, e))
+            logger.error('error while sending packet on {}: {}'.format(self.mch.address.interface, e))
 
     def enqueue_datagram(self, msg: str, address: bytes = None, msg_type: str = None) -> None:
         if not address:
             address = self.mch.multicast_address
 
         if msg_type:
-            logger.info('scheduling {0} message via {1} to {2}'.format(msg_type, self.mch.interface.name, address))
+            logger.info('scheduling {0} message via {1} to {2}'.format(msg_type, self.mch.address.interface, address))
 
         schedule_task = self.mch.aio_loop.create_task(self.schedule_datagram(msg, address))
         # Add this task to the pending list during teardown to wait during shutdown
@@ -509,7 +582,7 @@ class WSDDiscoveredDevice:
     # a dict of discovered devices with their UUID as key
     instances: dict[str, object] = {}
 
-    def __init__(self, xml_str: str, xaddr: str, interface: str) -> None:
+    def __init__(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
         self.last_seen = None
         self.addresses = {}
         self.props = {}
@@ -517,7 +590,7 @@ class WSDDiscoveredDevice:
 
         self.update(xml_str, xaddr, interface)
 
-    def update(self, xml_str: str, xaddr: str, interface: str) -> None:
+    def update(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
         try:
             tree = ETfromString(xml_str)
         except ElementTree.ParseError:
@@ -541,22 +614,21 @@ class WSDDiscoveredDevice:
         url = urllib.parse.urlparse(xaddr)
         addr, _, _ = url.netloc.rpartition(':')
         report = True
-        if interface not in self.addresses:
-            self.addresses[interface] = set([addr])
+        if interface.name not in self.addresses:
+            self.addresses[interface.name] = set([addr])
         else:
-            if addr not in self.addresses[interface]:
-                self.addresses[interface].add(addr)
+            if addr not in self.addresses[interface.name]:
+                self.addresses[interface.name].add(addr)
             else:
                 report = False
 
         self.last_seen = time.time()
         if ('DisplayName' in self.props) and ('BelongsTo' in self.props) and (report):
             self.display_name = self.props['DisplayName']
-            logger.info('discovered {} in {} on {}%{}'.format(self.display_name, self.props['BelongsTo'], addr,
-                        interface.interface.name))
+            logger.info('discovered {} in {} on {}'.format(self.display_name, self.props['BelongsTo'], addr))
         elif ('FriendlyName' in self.props) and (report):
             self.display_name = self.props['FriendlyName']
-            logger.info('discovered {} on {}%{}'.format(self.display_name, addr, interface.interface.name))
+            logger.info('discovered {} on {}'.format(self.display_name, addr))
 
         logger.debug(str(self.props))
 
@@ -719,7 +791,7 @@ class WSDClient(WSDUDPMessageHandler):
         url = xaddr
         if self.mch.family == socket.AF_INET6:
             host = '[{}]'.format(url.partition('[')[2].partition(']')[0])
-            url = url.replace(']', '%{}]'.format(self.mch.interface.name))
+            url = url.replace(']', '%{}]'.format(self.mch.address.interface))
 
         body = self.build_getmetadata_message(endpoint)
         request = urllib.request.Request(url, data=body, method='POST')
@@ -796,9 +868,8 @@ class WSDHost(WSDUDPMessageHandler):
         """WS-Discovery, Section 4.1, Hello message"""
         hello = ElementTree.Element('wsd:Hello')
         self.add_endpoint_reference(hello)
-        # THINK: Microsoft does not send the transport address here due
-        # to privacy reasons. Could make this optional.
-        self.add_xaddr(hello, self.mch.transport_address)
+        # THINK: Microsoft does not send the transport address here due to privacy reasons. Could make this optional.
+        self.add_xaddr(hello, self.mch.address.transport_str)
         self.add_metadata_version(hello)
 
         msg = self.build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
@@ -861,7 +932,7 @@ class WSDHost(WSDUDPMessageHandler):
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
         self.add_endpoint_reference(match)
         self.add_types(match)
-        self.add_xaddr(match, self.mch.transport_address)
+        self.add_xaddr(match, self.mch.address.transport_str)
         self.add_metadata_version(match)
 
         return matches, WSD_RESOLVE_MATCH
@@ -1079,16 +1150,6 @@ class ApiServer:
             await self.server.wait_closed()
 
 
-class NetworkInterface:
-
-    name: str
-    scope: int
-
-    def __init__(self, name: str, scope: int) -> None:
-        self.name = name
-        self.scope = scope
-
-
 class MetaEnumAfterInit(type):
 
     def __call__(cls, *cargs, **kwargs):
@@ -1149,81 +1210,71 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         """ handle network change message """
         pass
 
-    def add_interface(self, name: str, idx: int, scope: int) -> NetworkInterface:
-        if idx in self.interfaces:
-            self.interfaces[idx].name = name
+    def add_interface(self, interface: NetworkInterface) -> NetworkInterface:
+        # TODO: Cleanup
+        if interface.index in self.interfaces:
+            pass
+            # self.interfaces[idx].name = name
         else:
-            self.interfaces[idx] = NetworkInterface(name, scope)
+            self.interfaces[interface.index] = interface
 
-        return self.interfaces[idx]
+        return self.interfaces[interface.index]
 
-    def is_address_handled(self, addr: bytes, addr_family: int, interface: NetworkInterface) -> bool:
-        """
-        Check if we should handle that address.
-        Address must be provided as raw address, i.e. byte array
-        """
+    def is_address_handled(self, address: NetworkAddress) -> bool:
         # do not handle anything when we are not active
         if not self.active:
             return False
 
         # filter out address families we are not interested in
-        if args.ipv4only and addr_family != socket.AF_INET:
+        if args.ipv4only and address.family != socket.AF_INET:
             return False
-        if args.ipv6only and addr_family != socket.AF_INET6:
-            return False
-
-        # Nah, this check is not optimal but there are no local flags for
-        # addresses, but it should be safe for IPv4 anyways
-        # (https://tools.ietf.org/html/rfc5735#page-3)
-        if (addr_family == socket.AF_INET) and (addr[0] == 127):
-            return False
-        if (addr_family == socket.AF_INET6) and (addr[0:2] != b'\xfe\x80'):
+        if args.ipv6only and address.family != socket.AF_INET6:
             return False
 
-        addr_str = socket.inet_ntop(addr_family, addr)
+        if address.is_multicastable:
+            return False
 
-        if (args.interface) and (interface.name not in args.interface) and (addr_str not in args.interface):
+        # Use interface only if it's in the list of user-provided interface names
+        if ((args.interface) and (address.interface.name not in args.interface)
+                and (address.address_str not in args.interface)):
             return False
 
         return True
 
-    def handle_new_address(self, raw_addr: bytes, addr_family: int, interface: NetworkInterface) -> None:
-        addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.debug('new address {} on {}'.format(addr, interface.name))
+    def handle_new_address(self, address: NetworkAddress) -> None:
+        logger.debug('new address {}'.format(address))
 
-        if not self.is_address_handled(raw_addr, addr_family, interface):
-            logger.debug('ignoring that address on {}'.format(interface.name))
+        if not self.is_address_handled(address):
+            logger.debug('ignoring that address on {}'.format(address.interface))
             return
 
         # filter out what is not wanted
         # Ignore addresses or interfaces we already handle. There can only be
         # one multicast handler per address family and network interface
         for mch in self.mchs:
-            if mch.handles(addr_family, addr, interface):
+            if mch.handles_address(address):
                 return
 
-        logger.debug('handling traffic for {} on {}'.format(
-            addr, interface.name))
-        mch = MulticastHandler(addr_family, addr, interface, self.aio_loop)
+        logger.debug('handling traffic for {}'.format(address))
+        mch = MulticastHandler(address, self.aio_loop)
         self.mchs.append(mch)
 
         if not args.no_host:
             WSDHost(mch)
             if not args.no_http:
                 self.http_servers.append(WSDHttpServer(
-                    mch, WSDHttpRequestHandler, mch.family, self.aio_loop))
+                    mch, WSDHttpRequestHandler, address.family, self.aio_loop))
 
         if args.discovery:
             WSDClient(mch)
 
-    def handle_deleted_address(self, raw_addr: bytes, addr_family: int, interface: NetworkInterface) -> None:
-        addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.info('deleted address {} on {}'.format(addr, interface.name))
+    def handle_deleted_address(self, address: NetworkAddress) -> None:
+        logger.info('deleted address {}'.format(address))
 
-        if not self.is_address_handled(raw_addr, addr_family, interface):
+        if not self.is_address_handled(address):
             return
 
-        mch = self.get_mch_by_address(addr_family, addr, interface)
+        mch = self.get_mch_by_address(address)
         if mch is None:
             return
 
@@ -1290,13 +1341,13 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     def cleanup(self) -> None:
         self.teardown()
 
-    def get_mch_by_address(self, family: int, address: bytes, interface: NetworkInterface) -> MulticastHandler:
+    def get_mch_by_address(self, address: NetworkAddress) -> MulticastHandler:
         """
         Get the MCI for the address, its family and the interface.
         adress must be given as a string.
         """
         for retval in self.mchs:
-            if retval.handles(family, address, interface):
+            if retval.handles_address(address):
                 return retval
 
         return None
@@ -1414,7 +1465,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
                 if attr_type == IFA_LABEL:
                     name, = struct.unpack_from(str(attr_len - 4 - 1) + 's', buf, i + 4)
-                    self.add_interface(name.decode(), ifa_idx, ifa_scope)
+                    self.add_interface(NetworkInterface(name.decode(), ifa_scope, ifa_idx))
                 elif attr_type == IFA_LOCAL and ifa_family == socket.AF_INET:
                     addr = buf[i + 4:i + 4 + 4]
                 elif attr_type == IFA_ADDRESS and ifa_family == socket.AF_INET6:
@@ -1434,7 +1485,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 try:
                     logger.debug('unknown interface name for idx {}. resolving manually'.format(ifa_idx))
                     if_name = socket.if_indextoname(ifa_idx)
-                    self.add_interface(if_name, ifa_idx, ifa_scope)
+                    self.add_interface(NetworkInterface(if_name, ifa_scope, ifa_idx))
                 except OSError:
                     logger.exception('interface detection failed')
                     # accept this exception (which should not occur)
@@ -1443,11 +1494,11 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
             # In case really strange things happen and we could not find out the
             # interface name for the returned ifa_idx, we... log a message.
             if ifa_idx in self.interfaces:
-                iface = self.interfaces[ifa_idx]
+                address = NetworkAddress(ifa_family, addr, self.interfaces[ifa_idx])
                 if h_type == self.RTM_NEWADDR:
-                    self.handle_new_address(addr, ifa_family, iface)
+                    self.handle_new_address(address)
                 elif h_type == self.RTM_DELADDR:
-                    self.handle_deleted_address(addr, ifa_family, iface)
+                    self.handle_deleted_address(address)
             else:
                 logger.debug('unknown interface index: {}'.format(ifa_idx))
 
@@ -1579,7 +1630,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                 if idx > 0:
                     off_name = offset + 8
                     if_name = (buf[off_name:off_name + name_len]).decode()
-                    intf = self.add_interface(if_name, idx, idx)
+                    intf = self.add_interface(NetworkInterface(if_name, idx, idx))
 
             offset += align_to(sa_len, SA_ALIGNTO) if sa_len > 0 else SA_ALIGNTO
             addr_type_idx = addr_type_idx << 1
@@ -1593,13 +1644,14 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         if intf is None or intf.name in self.intf_blacklist or addr is None:
             return intf
 
+        address = NetworkAddress(addr_family, addr, intf)
         if rtm_type == self.RTM_DELADDR:
-            self.handle_deleted_address(addr, addr_family, intf)
+            self.handle_deleted_address(address)
         else:
             # Too bad, the address may be unuseable (tentative, e.g.) here
             # but we won't get any further notifcation about the address being
             # available for use. Thus, we try and may fail here
-            self.handle_new_address(addr, addr_family, intf)
+            self.handle_new_address(address)
 
         return intf
 
