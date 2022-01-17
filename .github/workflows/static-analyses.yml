@@ -1,0 +1,37 @@
+name: "Static Analyses: Syntax, Style, and Type Hinting Checks"
+
+on:
+  push:
+    branches: ["feat/workflows"]
+  pull_request:
+    branches: ["feat/workflows"]
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v1
+
+    - name: Set up Python 3.7
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.7
+
+    - name: Python 3.7 syntax check
+      run: python -m py_compile src/wsdd.py
+
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 --count --show-source --statistics src
+
+    - name: mypy type check
+      run: |
+        pip install mypy
+        mypy --python-version=3.7 src/wsdd.py
+        mypy --python-version=3.8 src/wsdd.py
+        mypy --python-version=3.9 src/wsdd.py
+        mypy --python-version=3.10 src/wsdd.py

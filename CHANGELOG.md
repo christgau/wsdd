@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- GitHub workflow for static analyses added (syntax, format, and type checks are performed).
+
+### Changed
+
+- Source code is spiced with type hints now.
+
 ## [0.7.0] - 2021-11-20
 
 ### Added
