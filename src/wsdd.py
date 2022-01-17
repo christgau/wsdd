@@ -34,16 +34,21 @@ import pwd
 import grp
 import datetime
 
-from typing import Any, Callable, ClassVar, Final
+from typing import Any, Callable, ClassVar, Deque, Dict, List, Optional, Set, Union, Tuple, TYPE_CHECKING
 
 # try to load more secure XML module first, fallback to default if not present
 try:
-    from defusedxml.ElementTree import fromstring as ETfromString
+    if not TYPE_CHECKING:
+        from defusedxml.ElementTree import fromstring as ETfromString
 except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
 
 WSDD_VERSION: str = '0.7.0'
+
+
+args: argparse.Namespace
+logger: logging.Logger
 
 
 class NetworkInterface:
@@ -58,7 +63,7 @@ class NetworkInterface:
         if index is not None:
             self._index = index
         else:
-            self._index = socket.if_nametoindex(self._interface.name)
+            self._index = socket.if_nametoindex(self._name)
 
     @property
     def name(self) -> str:
@@ -86,9 +91,9 @@ class NetworkAddress:
     _address_str: str
     _interface: NetworkInterface
 
-    def __init__(self, family: int, raw: bytes, interface: NetworkInterface) -> None:
+    def __init__(self, family: int, raw: Union[bytes, str], interface: NetworkInterface) -> None:
         self._family = family
-        self._raw_address = raw
+        self._raw_address = raw if isinstance(raw, bytes) else socket.inet_pton(family, raw)
         self._interface = interface
 
         self._address_str = socket.inet_ntop(self._family, self._raw_address)
@@ -126,7 +131,40 @@ class NetworkAddress:
         return '{}%{}'.format(self._address_str, self._interface.name)
 
     def __eq__(self, other) -> bool:
-        return (self._family == other.family and self.address == other.address and self.interface == other.interface)
+        return (self._family == other.family and self.raw == other.raw and self.interface == other.interface)
+
+
+class UdpAddress(NetworkAddress):
+
+    _transport_address: Tuple
+    _port: int
+
+    def __init__(self, family, transport_address: Tuple, interface: NetworkInterface) -> None:
+
+        if not (family == socket.AF_INET or family == socket.AF_INET6):
+            raise RuntimeError('Unsupport address address family: {}.'.format(family))
+
+        self._transport_address = transport_address
+        self._port = transport_address[1]
+
+        super().__init__(family, transport_address[0], interface)
+
+    @property
+    def transport_address(self):
+        return self._transport_address
+
+    @property
+    def port(self):
+        return self._port
+
+    def __eq__(self, other) -> bool:
+        return self.transport_address == other.transport_address
+
+
+class INetworkPacketHandler:
+
+    def handle_packet(self, msg: str, udp_src_address: UdpAddress) -> None:
+        pass
 
 
 class MulticastHandler:
@@ -147,12 +185,12 @@ class MulticastHandler:
     uc_send_socket: socket.socket
 
     # addresses used for communication and data
-    multicast_address: tuple[int, ...]
-    listen_address: tuple[int, ...]
+    multicast_address: UdpAddress
+    listen_address: Tuple
     aio_loop: asyncio.AbstractEventLoop
 
-    # dictionary that holds objects with a handle_request method for the sockets created above
-    message_handlers: dict[socket.socket, object]
+    # dictionary that holds INetworkPacketHandlers instances for sockets created above
+    message_handlers: Dict[socket.socket, List[INetworkPacketHandler]]
 
     def __init__(self, address: NetworkAddress, aio_loop: asyncio.AbstractEventLoop) -> None:
         self.address = address
@@ -163,10 +201,6 @@ class MulticastHandler:
         self.uc_send_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
         self.uc_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        # family-specific multicast address and local HTTP server (tuples)
-        self.multicast_address = None
-        self.listen_address = None
-
         self.message_handlers = {}
         self.aio_loop = aio_loop
 
@@ -175,14 +209,14 @@ class MulticastHandler:
         elif self.address.family == socket.AF_INET6:
             self.init_v6()
 
-        logger.info('joined multicast group {0} on {1}'.format(self.multicast_address, self.address))
+        logger.info('joined multicast group {0} on {1}'.format(self.multicast_address.transport_str, self.address))
         logger.debug('transport address on {0} is {1}'.format(self.address.interface.name, self.address.transport_str))
         logger.debug('will listen for HTTP traffic on address {0}'.format(self.listen_address))
 
         # register calbacks for incoming data (also for mc)
-        self.aio_loop.add_reader(self.recv_socket.fileno(), self.handle_request, self.recv_socket)
-        self.aio_loop.add_reader(self.mc_send_socket.fileno(), self.handle_request, self.mc_send_socket)
-        self.aio_loop.add_reader(self.uc_send_socket.fileno(), self.handle_request, self.uc_send_socket)
+        self.aio_loop.add_reader(self.recv_socket.fileno(), self.read_socket, self.recv_socket)
+        self.aio_loop.add_reader(self.mc_send_socket.fileno(), self.read_socket, self.mc_send_socket)
+        self.aio_loop.add_reader(self.uc_send_socket.fileno(), self.read_socket, self.uc_send_socket)
 
     def cleanup(self) -> None:
         self.aio_loop.remove_reader(self.recv_socket)
@@ -198,7 +232,8 @@ class MulticastHandler:
 
     def init_v6(self) -> None:
         idx = self.address.interface.index
-        self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
+        raw_mc_addr = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
+        self.multicast_address = UdpAddress(self.address.family, raw_mc_addr, self.address.interface)
 
         # v6: member_request = { multicast_addr, intf_idx }
         mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V6) + struct.pack('@I', idx))
@@ -232,7 +267,8 @@ class MulticastHandler:
 
     def init_v4(self) -> None:
         idx = self.address.interface.index
-        self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
+        raw_mc_addr = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
+        self.multicast_address = UdpAddress(self.address.family, raw_mc_addr, self.address.interface)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
         mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
@@ -256,7 +292,7 @@ class MulticastHandler:
 
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
 
-    def add_handler(self, socket: socket.socket, handler: object) -> None:
+    def add_handler(self, socket: socket.socket, handler: INetworkPacketHandler) -> None:
         # try:
         #    self.selector.register(socket, selectors.EVENT_READ, self)
         # except KeyError:
@@ -273,7 +309,7 @@ class MulticastHandler:
             if handler in self.message_handlers[socket]:
                 self.message_handlers[socket].remove(handler)
 
-    def handle_request(self, key: socket.socket) -> None:
+    def read_socket(self, key: socket.socket) -> None:
         # TODO: refactor this
         s = None
         if key == self.uc_send_socket:
@@ -285,19 +321,20 @@ class MulticastHandler:
         else:
             raise ValueError("Unknown socket passed as key.")
 
-        msg, address = s.recvfrom(WSD_MAX_LEN)
+        msg, raw_address = s.recvfrom(WSD_MAX_LEN)
+        address = UdpAddress(self.address.family, raw_address, self.address.interface)
         if s in self.message_handlers:
             for handler in self.message_handlers[s]:
-                handler.handle_request(msg, address)
+                handler.handle_packet(msg.decode('utf-8'), address)
 
-    def send(self, msg: bytes, addr: bytes):
+    def send(self, msg: bytes, addr: UdpAddress):
         # Request from a client must be answered from a socket that is bound
         # to the WSD port, i.e. the recv_socket. Messages to multicast
         # addresses are sent over the dedicated send socket.
         if addr == self.multicast_address:
-            self.mc_send_socket.sendto(msg, addr)
+            self.mc_send_socket.sendto(msg, addr.transport_address)
         else:
-            self.uc_send_socket.sendto(msg, addr)
+            self.uc_send_socket.sendto(msg, addr.transport_address)
 
 
 # constants for WSD XML/SOAP parsing
@@ -305,7 +342,7 @@ WSA_URI: str = 'http://schemas.xmlsoap.org/ws/2004/08/addressing'
 WSD_URI: str = 'http://schemas.xmlsoap.org/ws/2005/04/discovery'
 WSDP_URI: str = 'http://schemas.xmlsoap.org/ws/2006/02/devprof'
 
-namespaces: dict[str, str] = {
+namespaces: Dict[str, str] = {
     'soap': 'http://www.w3.org/2003/05/soap-envelope',
     'wsa': WSA_URI,
     'wsd': WSD_URI,
@@ -359,18 +396,15 @@ MAX_STARTUP_PROBE_DELAY: int = 3
 # some globals
 wsd_instance_id: int = int(time.time())
 
-args = None
-logger: logging.Logger = None
-
-WSDMessage = tuple[ElementTree.Element, str]
-MessageTypeHandler = Callable[[ElementTree.Element, ElementTree.Element], WSDMessage]
+WSDMessage = Tuple[ElementTree.Element, str]
+MessageTypeHandler = Callable[[ElementTree.Element, ElementTree.Element], Optional[WSDMessage]]
 
 
-class WSDMessageHandler:
-    known_messages = collections.deque([], WSD_MAX_KNOWN_MESSAGES)
+class WSDMessageHandler(INetworkPacketHandler):
+    known_messages: Deque[str] = collections.deque([], WSD_MAX_KNOWN_MESSAGES)
 
-    handlers = dict[str, MessageTypeHandler]
-    pending_tasks: list[asyncio.Task]
+    handlers: Dict[str, MessageTypeHandler]
+    pending_tasks: List[asyncio.Task]
 
     def __init__(self) -> None:
         self.handlers = {}
@@ -401,16 +435,16 @@ class WSDMessageHandler:
             item = ElementTree.SubElement(parent, 'wsd:XAddrs')
             item.text = 'http://{0}:{1}/{2}'.format(transport_addr, WSD_HTTP_PORT, args.uuid)
 
-    def build_message(self, to_addr: str, action_str: str, request_header: ElementTree.Element,
+    def build_message(self, to_addr: str, action_str: str, request_header: Optional[ElementTree.Element],
                       response: ElementTree.Element) -> str:
-        retval = self.xml_to_buffer(self.build_message_tree(to_addr, action_str, request_header, response)[0])
+        retval = self.xml_to_str(self.build_message_tree(to_addr, action_str, request_header, response)[0])
 
         logger.debug('constructed xml for WSD message: {0}'.format(retval))
 
         return retval
 
-    def build_message_tree(self, to_addr: str, action_str: str, request_header: ElementTree.Element,
-                           body: ElementTree.Element) -> (ElementTree.Element, str):
+    def build_message_tree(self, to_addr: str, action_str: str, request_header: Optional[ElementTree.Element],
+                           body: Optional[ElementTree.Element]) -> Tuple[ElementTree.Element, str]:
         """
         Build a WSD message with a given action string including SOAP header.
 
@@ -450,9 +484,9 @@ class WSDMessageHandler:
     def add_header_elements(self, header: ElementTree.Element, extra: Any) -> None:
         pass
 
-    def handle_message(self, msg: str, mch: MulticastHandler, src_address: tuple) -> None:
+    def handle_message(self, msg: str, src: Optional[UdpAddress] = None) -> Optional[str]:
         """
-        handle a WSD message that might be received by a MulticastHandler
+        handle a WSD message
         """
         try:
             tree = ETfromString(msg)
@@ -467,10 +501,10 @@ class WSDMessageHandler:
         if msg_id_tag is None:
             return None
 
-        msg_id = msg_id_tag.text
+        msg_id = str(msg_id_tag.text)
 
-        # if message came over a MulticastHandler, check for duplicates
-        if mch and self.is_duplicated_msg(msg_id):
+        # check for duplicates
+        if self.is_duplicated_msg(msg_id):
             logger.debug('known message ({0}): dropping it'.format(msg_id))
             return None
 
@@ -478,12 +512,12 @@ class WSDMessageHandler:
         if action_tag is None:
             return None
 
-        action = action_tag.text
+        action: str = str(action_tag.text)
         _, _, action_method = action.rpartition('/')
 
-        if mch:
+        if src:
             logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
-                src_address[0], src_address[1], mch.address.interface.name, action_method, msg_id))
+                src.transport_str, src.port, src.interface, action_method, msg_id))
         else:
             # http logging is already done by according server
             logger.debug('processing WSD {} message ({})'.format(action_method, msg_id))
@@ -517,9 +551,9 @@ class WSDMessageHandler:
 
         return False
 
-    def xml_to_buffer(self, xml: ElementTree) -> str:
-        retval = b'<?xml version="1.0" encoding="utf-8"?>'
-        retval = retval + ElementTree.tostring(xml, encoding='utf-8')
+    def xml_to_str(self, xml: ElementTree.Element) -> str:
+        retval = '<?xml version="1.0" encoding="utf-8"?>'
+        retval = retval + ElementTree.tostring(xml, encoding='utf-8').decode('utf-8')
 
         return retval
 
@@ -541,25 +575,22 @@ class WSDUDPMessageHandler(WSDMessageHandler):
     def teardown(self):
         self.tearing_down = True
 
-    def send_datagram(self, msg: str, dst: bytes) -> None:
+    def send_datagram(self, msg: str, dst: UdpAddress) -> None:
         try:
-            self.mch.send(msg, dst)
+            self.mch.send(msg.encode('utf-8'), dst)
         except Exception as e:
             logger.error('error while sending packet on {}: {}'.format(self.mch.address.interface, e))
 
-    def enqueue_datagram(self, msg: str, address: bytes = None, msg_type: str = None) -> None:
-        if not address:
-            address = self.mch.multicast_address
-
+    def enqueue_datagram(self, msg: str, address: UdpAddress, msg_type: Optional[str] = None) -> None:
         if msg_type:
-            logger.info('scheduling {0} message via {1} to {2}'.format(msg_type, self.mch.address.interface, address))
+            logger.info('scheduling {0} message via {1} to {2}'.format(msg_type, address.interface, address))
 
         schedule_task = self.mch.aio_loop.create_task(self.schedule_datagram(msg, address))
         # Add this task to the pending list during teardown to wait during shutdown
         if self.tearing_down:
             self.pending_tasks.append(schedule_task)
 
-    async def schedule_datagram(self, msg, address) -> None:
+    async def schedule_datagram(self, msg: str, address: UdpAddress) -> None:
         """
         Schedule to send the given message to the given address.
 
@@ -580,10 +611,15 @@ class WSDUDPMessageHandler(WSDMessageHandler):
 class WSDDiscoveredDevice:
 
     # a dict of discovered devices with their UUID as key
-    instances: dict[str, object] = {}
+    instances: Dict[str, 'WSDDiscoveredDevice'] = {}
+
+    addresses: Dict[str, Set[str]]
+    props: Dict[str, str]
+    display_name: str
+    last_seen: float
 
     def __init__(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
-        self.last_seen = None
+        self.last_seen = 0.0
         self.addresses = {}
         self.props = {}
         self.display_name = ''
@@ -640,11 +676,11 @@ class WSDDiscoveredDevice:
         prop_nodes = [n for n in nodes if n.tag.startswith(ns_prefix)]
         for node in prop_nodes:
             tag_name = node.tag[len(ns_prefix):]
-            self.props[tag_name] = node.text
+            self.props[tag_name] = str(node.text)
 
     def extract_host_props(self, root: ElementTree.Element) -> None:
         types = root.findtext('wsdp:Types', '', namespaces)
-        self.props['types'] = types.split(' ')
+        self.props['types'] = types.split(' ')[0]
         if types != PUB_COMPUTER:
             return
 
@@ -655,7 +691,8 @@ class WSDDiscoveredDevice:
 
 class WSDClient(WSDUDPMessageHandler):
 
-    instances: ClassVar[list[object]] = []
+    instances: ClassVar[List['WSDClient']] = []
+    probes: Dict[str, float]
 
     def __init__(self, mch: MulticastHandler) -> None:
         super().__init__(mch)
@@ -691,43 +728,44 @@ class WSDClient(WSDUDPMessageHandler):
         ElementTree.SubElement(probe, 'wsd:Types').text = WSD_TYPE_DEVICE
 
         xml, i = self.build_message_tree(WSA_DISCOVERY, WSD_PROBE, None, probe)
-        self.enqueue_datagram(self.xml_to_buffer(xml), msg_type='Probe')
+        self.enqueue_datagram(self.xml_to_str(xml), self.mch.multicast_address, msg_type='Probe')
         self.probes[i] = time.time()
 
     def teardown(self) -> None:
         super().teardown()
         self.remove_outdated_probes()
 
-    def handle_request(self, msg: str, address: bytes) -> None:
-        self.handle_message(msg, self.mch, address)
+    def handle_packet(self, msg: str, src: UdpAddress = None) -> None:
+        self.handle_message(msg, src)
 
-    def handle_hello(self, header: ElementTree.Element, body: ElementTree.Element) -> WSDMessage:
+    def handle_hello(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         pm_path = 'wsd:Hello'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, pm_path)
         if not xaddrs:
             logger.info('Hello without XAddrs, sending resolve')
-            msg = self.build_resolve_message(endpoint)
-            self.enqueue_datagram(msg)
-            return
+            msg = self.build_resolve_message(str(endpoint))
+            self.enqueue_datagram(msg, self.mch.multicast_address)
+            return None
 
         xaddr = None
         for addr in xaddrs.strip().split():
-            if (self.mch.family == socket.AF_INET6) and ('//[fe80::' in addr):
+            if (self.mch.address.family == socket.AF_INET6) and ('//[fe80::' in addr):
                 # use first link-local address for IPv6
                 xaddr = addr
                 break
-            elif self.mch.family == socket.AF_INET:
+            elif self.mch.address.family == socket.AF_INET:
                 # use first (and very likely the only) IPv4 address
                 xaddr = addr
                 break
 
         if xaddr is None:
-            return
+            return None
 
         logger.info('Hello from {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
+        return None
 
-    def handle_bye(self, header: ElementTree.Element, body: ElementTree.Element) -> WSDMessage:
+    def handle_bye(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         bye_path = 'wsd:Bye'
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
         device_uuid = str(uuid.UUID(endpoint))
@@ -736,7 +774,7 @@ class WSDClient(WSDUDPMessageHandler):
 
         return None
 
-    def handle_probe_match(self, header: ElementTree.Element, body: ElementTree.Element) -> WSDMessage:
+    def handle_probe_match(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         # do not handle to probematches issued not sent by ourself
         rel_msg = header.findtext('wsa:RelatesTo', None, namespaces)
         if rel_msg not in self.probes:
@@ -748,13 +786,15 @@ class WSDClient(WSDUDPMessageHandler):
         endpoint, xaddrs = self.extract_endpoint_metadata(body, pm_path)
         if not xaddrs:
             logger.debug('probe match without XAddrs, sending resolve')
-            msg = self.build_resolve_message(endpoint)
-            self.enqueue_datagram(msg)
+            msg = self.build_resolve_message(str(endpoint))
+            self.enqueue_datagram(msg, self.mch.multicast_address)
             return None
 
         xaddr = xaddrs.strip()
         logger.debug('probe match for {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
+
+        return None
 
     def build_resolve_message(self, endpoint: str) -> str:
         resolve = ElementTree.Element('wsd:Resolve')
@@ -762,18 +802,20 @@ class WSDClient(WSDUDPMessageHandler):
 
         return self.build_message(WSA_DISCOVERY, WSD_RESOLVE, None, resolve)
 
-    def handle_resolve_match(self, header: ElementTree.ElementTree, body: ElementTree.Element) -> WSDMessage:
+    def handle_resolve_match(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         rm_path = 'wsd:ResolveMatches/wsd:ResolveMatch'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, rm_path)
         if not endpoint or not xaddrs:
             logger.debug('resolve match without endpoint/xaddr')
-            return
+            return None
 
         xaddr = xaddrs.strip()
         logger.debug('resolve match for {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
 
-    def extract_endpoint_metadata(self, body: ElementTree.Element, prefix: str) -> (str, str):
+        return None
+
+    def extract_endpoint_metadata(self, body: ElementTree.Element, prefix: str) -> Tuple[Optional[str], Optional[str]]:
         prefix = prefix + '/'
         addr_path = 'wsa:EndpointReference/wsa:Address'
 
@@ -789,12 +831,12 @@ class WSDClient(WSDUDPMessageHandler):
 
         host = None
         url = xaddr
-        if self.mch.family == socket.AF_INET6:
+        if self.mch.address.family == socket.AF_INET6:
             host = '[{}]'.format(url.partition('[')[2].partition(']')[0])
             url = url.replace(']', '%{}]'.format(self.mch.address.interface))
 
         body = self.build_getmetadata_message(endpoint)
-        request = urllib.request.Request(url, data=body, method='POST')
+        request = urllib.request.Request(url, data=body.encode('utf-8'), method='POST')
         request.add_header('Content-Type', 'application/soap+xml')
         request.add_header('User-Agent', 'wsdd')
         if host is not None:
@@ -806,16 +848,16 @@ class WSDClient(WSDUDPMessageHandler):
         except urllib.error.URLError as e:
             logger.warning('could not fetch metadata from: {} {}'.format(url, e))
 
-    def build_getmetadata_message(self, endpoint):
+    def build_getmetadata_message(self, endpoint) -> str:
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
-        return self.xml_to_buffer(tree)
+        return self.xml_to_str(tree)
 
     def handle_metadata(self, meta: str, endpoint: str, xaddr: str) -> None:
         device_uuid = str(uuid.UUID(endpoint))
         if device_uuid in WSDDiscoveredDevice.instances:
-            WSDDiscoveredDevice.instances[device_uuid].update(meta, xaddr, self.mch)
+            WSDDiscoveredDevice.instances[device_uuid].update(meta, xaddr, self.mch.address.interface)
         else:
-            WSDDiscoveredDevice.instances[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch)
+            WSDDiscoveredDevice.instances[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch.address.interface)
 
     def remove_outdated_probes(self) -> None:
         cut = time.time() - PROBE_TIMEOUT * 2
@@ -837,7 +879,7 @@ class WSDHost(WSDUDPMessageHandler):
     """Class for handling WSD requests coming from UDP datagrams."""
 
     message_number: ClassVar[int] = 0
-    instances: ClassVar[list[object]] = []
+    instances: ClassVar[List['WSDHost']] = []
 
     def __init__(self, mch: MulticastHandler) -> None:
         super().__init__(mch)
@@ -859,10 +901,10 @@ class WSDHost(WSDUDPMessageHandler):
         super().teardown()
         self.send_bye()
 
-    def handle_request(self, msg: str, address: tuple[int, ...]) -> None:
-        reply = self.handle_message(msg, self.mch, address)
+    def handle_packet(self, msg: str, src: UdpAddress) -> None:
+        reply = self.handle_message(msg, src)
         if reply:
-            self.enqueue_datagram(reply, address=address)
+            self.enqueue_datagram(reply, src)
 
     def send_hello(self) -> None:
         """WS-Discovery, Section 4.1, Hello message"""
@@ -873,7 +915,7 @@ class WSDHost(WSDUDPMessageHandler):
         self.add_metadata_version(hello)
 
         msg = self.build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
-        self.enqueue_datagram(msg, msg_type='Hello')
+        self.enqueue_datagram(msg, self.mch.multicast_address, msg_type='Hello')
 
     def send_bye(self) -> None:
         """WS-Discovery, Section 4.2, Bye message"""
@@ -881,9 +923,9 @@ class WSDHost(WSDUDPMessageHandler):
         self.add_endpoint_reference(bye)
 
         msg = self.build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
-        self.enqueue_datagram(msg, msg_type='Bye')
+        self.enqueue_datagram(msg, self.mch.multicast_address, msg_type='Bye')
 
-    def handle_probe(self, header: ElementTree.Element, body: ElementTree.Element) -> WSDMessage:
+    def handle_probe(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         probe = body.find('./wsd:Probe', namespaces)
         if probe is None:
             return None
@@ -913,7 +955,7 @@ class WSDHost(WSDUDPMessageHandler):
 
         return matches, WSD_PROBE_MATCH
 
-    def handle_resolve(self, header: ElementTree.Element, body: ElementTree.Element) -> WSDMessage:
+    def handle_resolve(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         resolve = body.find('./wsd:Resolve', namespaces)
         if resolve is None:
             return None
@@ -992,28 +1034,26 @@ class WSDHttpMessageHandler(WSDMessageHandler):
 class WSDHttpServer(http.server.HTTPServer):
     """ HTTP server both with IPv6 support and WSD handling """
 
-    address_family: int
     mch: MulticastHandler
     aio_loop: asyncio.AbstractEventLoop
     wsd_handler: WSDHttpMessageHandler
     registered: bool
 
-    def __init__(self, mch: MulticastHandler, RequestHandlerClass: http.server.BaseHTTPRequestHandler,
-                 addr_family: int, aio_loop: asyncio.AbstractEventLoop):
+    def __init__(self, mch: MulticastHandler, aio_loop: asyncio.AbstractEventLoop):
         # hacky way to convince HTTP/SocketServer of the address family
-        type(self).address_family = addr_family
+        type(self).address_family = mch.address.family
 
-        # remember actual address family used by the server instance
-        self.addr_family = addr_family
         self.mch = mch
         self.aio_loop = aio_loop
         self.wsd_handler = WSDHttpMessageHandler()
         self.registered = False
 
-        super().__init__(mch.listen_address, RequestHandlerClass)
+        # WSDHttpRequestHandler is a BaseHTTPRequestHandler. Passing to the parent constructor is therefore safe and
+        # we can ignore the type error reported by mypy
+        super().__init__(mch.listen_address, WSDHttpRequestHandler)  # type: ignore
 
     def server_bind(self) -> None:
-        if self.address_family == socket.AF_INET6:
+        if self.mch.address.family == socket.AF_INET6:
             self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
         super().server_bind()
@@ -1046,22 +1086,22 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         content_length = int(self.headers['Content-Length'])
         body = self.rfile.read(content_length)
 
-        response = self.server.wsd_handler.handle_message(body, None, None)
+        response = self.server.wsd_handler.handle_message(body)  # type: ignore
         if response:
             self.send_response(http.HTTPStatus.OK)
             self.send_header('Content-Type', MIME_TYPE_SOAP_XML)
             self.end_headers()
-            self.wfile.write(response)
+            self.wfile.write(response.encode('utf-8'))
         else:
             self.send_error(http.HTTPStatus.BAD_REQUEST)
 
 
 class ApiServer:
 
-    address_monitor: object
+    address_monitor: 'NetworkAddressMonitor'
 
     def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: bytes,
-                 address_monitor: object) -> None:
+                 address_monitor: 'NetworkAddressMonitor') -> None:
         self.server = None
         self.address_monitor = address_monitor
 
@@ -1070,13 +1110,16 @@ class ApiServer:
 
     async def create_server(self, aio_loop: asyncio.AbstractEventLoop, listen_address: Any) -> None:
 
+        # It appears mypy is not able to check the argument to create_task and the return value of start_server
+        # correctly. The docs say start_server returns a coroutine and the create_task takes a coro. And: It works.
+        # Thus, we ignore type errors here.
         if isinstance(listen_address, int) or listen_address.isnumeric():
             self.server = await aio_loop.create_task(asyncio.start_server(self.on_connect, host='localhost',
                                                      port=int(listen_address), loop=aio_loop, reuse_address=True,
-                                                     reuse_port=True))
+                                                     reuse_port=True))  # type: ignore
         else:
             self.server = await aio_loop.create_task(asyncio.start_unix_server(self.on_connect, path=listen_address,
-                                                     loop=aio_loop))
+                                                     loop=aio_loop))  # type: ignore
 
     async def on_connect(self, read_stream: asyncio.StreamReader, write_stream: asyncio.StreamWriter) -> None:
         while True:
@@ -1122,15 +1165,15 @@ class ApiServer:
         else:
             logger.debug('could not handle API request: {}'.format(line))
 
-    def get_clients_by_interface(self, interface: str) -> list[WSDClient]:
-        return [c for c in WSDClient.instances if c.mch.interface.name == interface or not interface]
+    def get_clients_by_interface(self, interface: Optional[str]) -> List[WSDClient]:
+        return [c for c in WSDClient.instances if c.mch.address.interface.name == interface or not interface]
 
     def get_list_reply(self) -> str:
         retval = ''
         for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
             addrs_str = []
-            for mci, addrs in dev.addresses.items():
-                addrs_str.append(', '.join(['{}%{}'.format(a, mci.interface.name) for a in addrs]))
+            for addrs in dev.addresses.items():
+                addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
                 dev_uuid,
@@ -1169,11 +1212,11 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
 
     instance: ClassVar[object] = None
 
-    interfaces: dict[int, NetworkInterface]
+    interfaces: Dict[int, NetworkInterface]
     aio_loop: asyncio.AbstractEventLoop
-    mchs: list[MulticastHandler]
-    http_servers: list[WSDHttpServer]
-    teardown_tasks: list[asyncio.Task]
+    mchs: List[MulticastHandler]
+    http_servers: List[WSDHttpServer]
+    teardown_tasks: List[asyncio.Task]
     active: bool
 
     def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
@@ -1206,7 +1249,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     def do_enumerate(self) -> None:
         pass
 
-    def handle_request(self) -> None:
+    def handle_change(self) -> None:
         """ handle network change message """
         pass
 
@@ -1262,8 +1305,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         if not args.no_host:
             WSDHost(mch)
             if not args.no_http:
-                self.http_servers.append(WSDHttpServer(
-                    mch, WSDHttpRequestHandler, address.family, self.aio_loop))
+                self.http_servers.append(WSDHttpServer(mch, self.aio_loop))
 
         if args.discovery:
             WSDClient(mch)
@@ -1274,7 +1316,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         if not self.is_address_handled(address):
             return
 
-        mch = self.get_mch_by_address(address)
+        mch: Optional[MulticastHandler] = self.get_mch_by_address(address)
         if mch is None:
             return
 
@@ -1341,7 +1383,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     def cleanup(self) -> None:
         self.teardown()
 
-    def get_mch_by_address(self, address: NetworkAddress) -> MulticastHandler:
+    def get_mch_by_address(self, address: NetworkAddress) -> Optional[MulticastHandler]:
         """
         Get the MCI for the address, its family and the interface.
         adress must be given as a string.
@@ -1367,7 +1409,6 @@ NLM_F_MATCH: int = 0x200
 NLM_F_DUMP: int = NLM_F_ROOT | NLM_F_MATCH
 
 # self defines
-NLM_HDR_LEN: int = 16
 NLM_HDR_ALIGNTO: int = 4
 
 # ifa flags
@@ -1396,9 +1437,9 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
     Implementation of the AddressMonitor for Netlink sockets, i.e. Linux
     """
 
-    RTM_NEWADDR: Final[int] = 20
-    RTM_DELADDR: Final[int] = 21
-    RTM_GETADDR: Final[int] = 22
+    RTM_NEWADDR: int = 20
+    RTM_DELADDR: int = 21
+    RTM_GETADDR: int = 22
 
     socket: socket.socket
 
@@ -1413,7 +1454,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
         self.socket.bind((0, rtm_groups))
-        self.aio_loop.add_reader(self.socket.fileno(), self.handle_request)
+        self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
     def do_enumerate(self) -> None:
         super().do_enumerate()
@@ -1423,8 +1464,8 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                           NLM_F_REQUEST | NLM_F_DUMP, 1, 0, socket.AF_PACKET)
         self.socket.sendto(req, kernel)
 
-    def handle_request(self) -> None:
-        super().handle_request()
+    def handle_change(self) -> None:
+        super().handle_change()
 
         buf, src = self.socket.recvfrom(4096)
         logger.debug('netlink message with {} bytes'.format(len(buf)))
@@ -1535,12 +1576,12 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     """
 
     # from sys/net/route.h
-    RTM_NEWADDR: Final[int] = 0xC
-    RTM_DELADDR: Final[int] = 0xD
-    RTM_IFINFO: Final[int] = 0xE
+    RTM_NEWADDR: int = 0xC
+    RTM_DELADDR: int = 0xD
+    RTM_IFINFO: int = 0xE
 
     socket: socket.socket
-    intf_blacklist: list[str]
+    intf_blacklist: List[str]
 
     def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
         super().__init__(aio_loop)
@@ -1550,13 +1591,13 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         # Do this before fetching the current routing information to avoid
         # race condition.
         self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
-        self.aio_loop.add_reader(self.socket.fileno(), self.handle_request)
+        self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
     def do_enumerate(self) -> None:
         super().do_enumerate()
         mib = [CTL_NET, socket.AF_ROUTE, 0, 0, NET_RT_IFLIST, 0]
         rt_mib = (ctypes.c_int * len(mib))()
-        rt_mib[:] = mib[:]
+        rt_mib[:] = [ctypes.c_int(m) for m in mib]
 
         libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
 
@@ -1572,8 +1613,8 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
 
         self.parse_route_socket_response(rt_buf.raw, True)
 
-    def handle_request(self) -> None:
-        super().handle_request()
+    def handle_change(self) -> None:
+        super().handle_change()
 
         self.parse_route_socket_response(self.socket.recv(4096), False)
 
@@ -1609,11 +1650,11 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
 
             offset += rtm_len
 
-    def parse_addrs(self, buf: bytes, offset: int, limit: int, intf: NetworkInterface, addr_mask: int, rtm_type: int,
-                    flags: int) -> NetworkInterface:
+    def parse_addrs(self, buf: bytes, offset: int, limit: int, intf: Optional[NetworkInterface], addr_mask: int,
+                    rtm_type: int, flags: int) -> Optional[NetworkInterface]:
         addr_type_idx = 1
         addr = None
-        addr_family = None
+        addr_family: int = socket.AF_UNSPEC
         while offset < limit:
             while not (addr_type_idx & addr_mask) and (addr_type_idx <= addr_mask):
                 addr_type_idx = addr_type_idx << 1
@@ -1805,9 +1846,9 @@ def chroot(root: str) -> bool:
     return True
 
 
-def get_ids_from_userspec(user_spec: str) -> tuple[int, int]:
-    uid = None
-    gid = None
+def get_ids_from_userspec(user_spec: str) -> Tuple[int, int]:
+    uid: int
+    gid: int
     try:
         user, _, group = user_spec.partition(':')
 
@@ -1817,8 +1858,7 @@ def get_ids_from_userspec(user_spec: str) -> tuple[int, int]:
         if group:
             gid = grp.getgrnam(group).gr_gid
     except Exception as e:
-        logger.error('could not get uid/gid for {}: {}'.format(user_spec, e))
-        return False
+        raise RuntimeError('could not get uid/gid for {}: {}'.format(user_spec, e))
 
     return (uid, gid)
 
@@ -1853,6 +1893,8 @@ def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> 
 
 
 def main() -> int:
+    global logger, args
+
     parse_args()
 
     if args.ipv4only and args.ipv6only:
