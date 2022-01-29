@@ -2,9 +2,9 @@ name: "Static Analyses: Syntax, Style, and Type Hinting Checks"
 
 on:
   push:
-    branches: ["feat/workflows"]
+    branches: ["master", "feat/workflows"]
   pull_request:
-    branches: ["feat/workflows"]
+    branches: ["master", "feat/workflows"]
   schedule:
     - cron: '0 0 * * *'
 
