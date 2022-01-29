@@ -1114,12 +1114,12 @@ class ApiServer:
         # correctly. The docs say start_server returns a coroutine and the create_task takes a coro. And: It works.
         # Thus, we ignore type errors here.
         if isinstance(listen_address, int) or listen_address.isnumeric():
-            self.server = await aio_loop.create_task(asyncio.start_server(self.on_connect, host='localhost',
-                                                     port=int(listen_address), loop=aio_loop, reuse_address=True,
-                                                     reuse_port=True))  # type: ignore
+            self.server = await aio_loop.create_task(asyncio.start_server(  # type: ignore
+                self.on_connect, host='localhost', port=int(listen_address), loop=aio_loop, reuse_address=True,
+                reuse_port=True))
         else:
-            self.server = await aio_loop.create_task(asyncio.start_unix_server(self.on_connect, path=listen_address,
-                                                     loop=aio_loop))  # type: ignore
+            self.server = await aio_loop.create_task(asyncio.start_unix_server(  # type: ignore
+                self.on_connect, path=listen_address, loop=aio_loop))
 
     async def on_connect(self, read_stream: asyncio.StreamReader, write_stream: asyncio.StreamWriter) -> None:
         while True:
