@@ -30,7 +30,7 @@ jobs:
 
     - name: mypy type check
       run: |
-        pip install mypy
+        pip install mypy==910
         mypy --python-version=3.7 src/wsdd.py
         mypy --python-version=3.8 src/wsdd.py
         mypy --python-version=3.9 src/wsdd.py
