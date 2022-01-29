@@ -9,12 +9,12 @@
 # see http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf and
 # related documents for details (look at README for more references)
 #
-# (c) Steffen Christgau, 2017-2020
+# (c) Steffen Christgau, 2017-2021
 
 import sys
 import signal
 import socket
-import selectors
+import asyncio
 import struct
 import argparse
 import uuid
@@ -29,11 +29,142 @@ import http
 import http.server
 import urllib.request
 import urllib.parse
-import socketserver
 import os
 import pwd
 import grp
 import datetime
+
+from typing import Any, Callable, ClassVar, Deque, Dict, List, Optional, Set, Union, Tuple, TYPE_CHECKING
+
+# try to load more secure XML module first, fallback to default if not present
+try:
+    if not TYPE_CHECKING:
+        from defusedxml.ElementTree import fromstring as ETfromString
+except ModuleNotFoundError:
+    from xml.etree.ElementTree import fromstring as ETfromString
+
+
+WSDD_VERSION: str = '0.7.0'
+
+
+args: argparse.Namespace
+logger: logging.Logger
+
+
+class NetworkInterface:
+
+    _name: str
+    _index: int
+    _scope: int
+
+    def __init__(self, name: str, scope: int, index: int = None) -> None:
+        self._name = name
+        self._scope = scope
+        if index is not None:
+            self._index = index
+        else:
+            self._index = socket.if_nametoindex(self._name)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def scope(self) -> int:
+        return self._scope
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    def __str__(self) -> str:
+        return self._name
+
+    def __eq__(self, other) -> bool:
+        return self._name == other.name
+
+
+class NetworkAddress:
+
+    _family: int
+    _raw_address: bytes
+    _address_str: str
+    _interface: NetworkInterface
+
+    def __init__(self, family: int, raw: Union[bytes, str], interface: NetworkInterface) -> None:
+        self._family = family
+        self._raw_address = raw if isinstance(raw, bytes) else socket.inet_pton(family, raw)
+        self._interface = interface
+
+        self._address_str = socket.inet_ntop(self._family, self._raw_address)
+
+    @property
+    def address_str(self):
+        return self._address_str
+
+    @property
+    def family(self):
+        return self._family
+
+    @property
+    def interface(self):
+        return self._interface
+
+    @property
+    def is_multicastable(self):
+        # Nah, this check is not optimal but there are no local flags for
+        # addresses, but it should be safe for IPv4 anyways
+        # (https://tools.ietf.org/html/rfc5735#page-3)
+        return ((self._family == socket.AF_INET) and (self._raw_address[0] == 127)
+                or (self._family == socket.AF_INET6) and (self._raw_address[0:2] != b'\xfe\x80'))
+
+    @property
+    def raw(self):
+        return self._raw_address
+
+    @property
+    def transport_str(self):
+        """the string representation of the local address overridden in network setup (for IPv6)"""
+        return self._address_str if self._family == socket.AF_INET else '[{}]'.format(self._address_str)
+
+    def __str__(self) -> str:
+        return '{}%{}'.format(self._address_str, self._interface.name)
+
+    def __eq__(self, other) -> bool:
+        return (self._family == other.family and self.raw == other.raw and self.interface == other.interface)
+
+
+class UdpAddress(NetworkAddress):
+
+    _transport_address: Tuple
+    _port: int
+
+    def __init__(self, family, transport_address: Tuple, interface: NetworkInterface) -> None:
+
+        if not (family == socket.AF_INET or family == socket.AF_INET6):
+            raise RuntimeError('Unsupport address address family: {}.'.format(family))
+
+        self._transport_address = transport_address
+        self._port = transport_address[1]
+
+        super().__init__(family, transport_address[0], interface)
+
+    @property
+    def transport_address(self):
+        return self._transport_address
+
+    @property
+    def port(self):
+        return self._port
+
+    def __eq__(self, other) -> bool:
+        return self.transport_address == other.transport_address
+
+
+class INetworkPacketHandler:
+
+    def handle_packet(self, msg: str, udp_src_address: UdpAddress) -> None:
+        pass
 
 
 class MulticastHandler:
@@ -41,67 +172,80 @@ class MulticastHandler:
     A class for handling multicast traffic on a given interface for a
     given address family. It provides multicast sender and receiver sockets
     """
-    # TODO: this one needs some cleanup
-    def __init__(self, family, address, interface, selector):
+
+    # base interface addressing information
+    address: NetworkAddress
+
+    # individual interface-bound sockets for:
+    #  - receiving multicast traffic
+    #  - sending multicast from a socket bound to WSD port
+    #  - sending unicast messages from a random port
+    recv_socket: socket.socket
+    mc_send_socket: socket.socket
+    uc_send_socket: socket.socket
+
+    # addresses used for communication and data
+    multicast_address: UdpAddress
+    listen_address: Tuple
+    aio_loop: asyncio.AbstractEventLoop
+
+    # dictionary that holds INetworkPacketHandlers instances for sockets created above
+    message_handlers: Dict[socket.socket, List[INetworkPacketHandler]]
+
+    def __init__(self, address: NetworkAddress, aio_loop: asyncio.AbstractEventLoop) -> None:
         self.address = address
-        self.family = family
-        self.interface = interface
-        self.recv_socket = socket.socket(self.family, socket.SOCK_DGRAM)
+
+        self.recv_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
         self.recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.send_socket = socket.socket(self.family, socket.SOCK_DGRAM)
-        self.transport_address = address
-        self.multicast_address = None
-        self.listen_address = None
+        self.mc_send_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
+        self.uc_send_socket = socket.socket(self.address.family, socket.SOCK_DGRAM)
+        self.uc_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         self.message_handlers = {}
-        self.selector = selector
+        self.aio_loop = aio_loop
 
-        if family == socket.AF_INET:
+        if self.address.family == socket.AF_INET:
             self.init_v4()
-        elif family == socket.AF_INET6:
+        elif self.address.family == socket.AF_INET6:
             self.init_v6()
 
-        logger.info('joined multicast group {0} on {2}%{1}'.format(
-            self.multicast_address, self.interface.name, self.address))
-        logger.debug('transport address on {0} is {1}'.format(
-            self.interface.name, self.transport_address))
-        logger.debug('will listen for HTTP traffic on address {0}'.format(
-            self.listen_address))
+        logger.info('joined multicast group {0} on {1}'.format(self.multicast_address.transport_str, self.address))
+        logger.debug('transport address on {0} is {1}'.format(self.address.interface.name, self.address.transport_str))
+        logger.debug('will listen for HTTP traffic on address {0}'.format(self.listen_address))
 
-        self.selector.register(self.recv_socket, selectors.EVENT_READ, self)
-        self.selector.register(self.send_socket, selectors.EVENT_READ, self)
+        # register calbacks for incoming data (also for mc)
+        self.aio_loop.add_reader(self.recv_socket.fileno(), self.read_socket, self.recv_socket)
+        self.aio_loop.add_reader(self.mc_send_socket.fileno(), self.read_socket, self.mc_send_socket)
+        self.aio_loop.add_reader(self.uc_send_socket.fileno(), self.read_socket, self.uc_send_socket)
 
-    def cleanup(self):
-        self.selector.unregister(self.recv_socket)
-        self.selector.unregister(self.send_socket)
+    def cleanup(self) -> None:
+        self.aio_loop.remove_reader(self.recv_socket)
+        self.aio_loop.remove_reader(self.mc_send_socket)
+        self.aio_loop.remove_reader(self.uc_send_socket)
 
         self.recv_socket.close()
-        self.send_socket.close()
+        self.mc_send_socket.close()
+        self.uc_send_socket.close()
 
-    def handles(self, family, addr, interface):
-        return (self.family == family and self.address == addr and
-                self.interface.name == interface.name)
+    def handles_address(self, address: NetworkAddress) -> bool:
+        return self.address == address
 
-    def init_v6(self):
-        idx = socket.if_nametoindex(self.interface.name)
-        self.multicast_address = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
+    def init_v6(self) -> None:
+        idx = self.address.interface.index
+        raw_mc_addr = (WSD_MCAST_GRP_V6, WSD_UDP_PORT, 0x575C, idx)
+        self.multicast_address = UdpAddress(self.address.family, raw_mc_addr, self.address.interface)
 
         # v6: member_request = { multicast_addr, intf_idx }
-        mreq = (
-            socket.inet_pton(self.family, WSD_MCAST_GRP_V6) +
-            struct.pack('@I', idx))
-        self.recv_socket.setsockopt(
-            socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
-        self.recv_socket.setsockopt(
-            socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V6) + struct.pack('@I', idx))
+        self.recv_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+        self.recv_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
         # Could anyone ask the Linux folks for the rationale for this!?
         if platform.system() == 'Linux':
             try:
                 # supported starting from Linux 4.20
                 IPV6_MULTICAST_ALL = 29
-                self.recv_socket.setsockopt(
-                    socket.IPPROTO_IPV6, IPV6_MULTICAST_ALL, 0)
+                self.recv_socket.setsockopt(socket.IPPROTO_IPV6, IPV6_MULTICAST_ALL, 0)
             except OSError as e:
                 logger.warning('cannot unset all_multicast: {}'.format(e))
 
@@ -112,27 +256,23 @@ class MulticastHandler:
         except OSError:
             self.recv_socket.bind(('::', 0, 0, idx))
 
-        self.send_socket.setsockopt(
-            socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
-        self.send_socket.setsockopt(
-            socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
-        self.send_socket.setsockopt(
-            socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
+        # bind unicast socket to interface address and WSD's udp port
+        self.uc_send_socket.bind((str(self.address), WSD_UDP_PORT, 0, idx))
 
-        self.transport_address = '[{0}]'.format(self.address)
-        self.listen_address = (self.address, WSD_HTTP_PORT, 0, idx)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
 
-    def init_v4(self):
-        idx = socket.if_nametoindex(self.interface.name)
-        self.multicast_address = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
+        self.listen_address = (self.address.address_str, WSD_HTTP_PORT, 0, idx)
+
+    def init_v4(self) -> None:
+        idx = self.address.interface.index
+        raw_mc_addr = (WSD_MCAST_GRP_V4, WSD_UDP_PORT)
+        self.multicast_address = UdpAddress(self.address.family, raw_mc_addr, self.address.interface)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
-        mreq = (
-            socket.inet_pton(self.family, WSD_MCAST_GRP_V4) +
-            socket.inet_pton(self.family, self.address) +
-            struct.pack('@I', idx))
-        self.recv_socket.setsockopt(
-            socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
+        self.recv_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         if platform.system() == 'Linux':
             IP_MULTICAST_ALL = 49
@@ -143,53 +283,66 @@ class MulticastHandler:
         except OSError:
             self.recv_socket.bind(('', WSD_UDP_PORT))
 
-        self.send_socket.setsockopt(
-            socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
-        self.send_socket.setsockopt(
-            socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-        self.send_socket.setsockopt(
-            socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
+        # bind unicast socket to interface address and WSD's udp port
+        self.uc_send_socket.bind((self.address.address_str, WSD_UDP_PORT))
 
-        self.listen_address = (self.address, WSD_HTTP_PORT)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
 
-    def add_handler(self, socket, handler):
-        try:
-            self.selector.register(socket, selectors.EVENT_READ, self)
-        except KeyError:
-            # accept attempts of multiple registrations
-            pass
+        self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
+
+    def add_handler(self, socket: socket.socket, handler: INetworkPacketHandler) -> None:
+        # try:
+        #    self.selector.register(socket, selectors.EVENT_READ, self)
+        # except KeyError:
+        #    # accept attempts of multiple registrations
+        #    pass
 
         if socket in self.message_handlers:
             self.message_handlers[socket].append(handler)
         else:
             self.message_handlers[socket] = [handler]
 
-    def remove_handler(self, socket, handler):
+    def remove_handler(self, socket: socket.socket, handler) -> None:
         if socket in self.message_handlers:
             if handler in self.message_handlers[socket]:
                 self.message_handlers[socket].remove(handler)
 
-    def handle_request(self, key):
+    def read_socket(self, key: socket.socket) -> None:
+        # TODO: refactor this
         s = None
-        if key.fileobj == self.send_socket:
-            s = self.send_socket
-        elif key.fileobj == self.recv_socket:
+        if key == self.uc_send_socket:
+            s = self.uc_send_socket
+        elif key == self.mc_send_socket:
+            s = self.mc_send_socket
+        elif key == self.recv_socket:
             s = self.recv_socket
         else:
-            return
+            raise ValueError("Unknown socket passed as key.")
 
-        msg, address = s.recvfrom(WSD_MAX_LEN)
+        msg, raw_address = s.recvfrom(WSD_MAX_LEN)
+        address = UdpAddress(self.address.family, raw_address, self.address.interface)
         if s in self.message_handlers:
             for handler in self.message_handlers[s]:
-                handler.handle_request(msg, address)
+                handler.handle_packet(msg.decode('utf-8'), address)
+
+    def send(self, msg: bytes, addr: UdpAddress):
+        # Request from a client must be answered from a socket that is bound
+        # to the WSD port, i.e. the recv_socket. Messages to multicast
+        # addresses are sent over the dedicated send socket.
+        if addr == self.multicast_address:
+            self.mc_send_socket.sendto(msg, addr.transport_address)
+        else:
+            self.uc_send_socket.sendto(msg, addr.transport_address)
 
 
 # constants for WSD XML/SOAP parsing
-WSA_URI = 'http://schemas.xmlsoap.org/ws/2004/08/addressing'
-WSD_URI = 'http://schemas.xmlsoap.org/ws/2005/04/discovery'
-WSDP_URI = 'http://schemas.xmlsoap.org/ws/2006/02/devprof'
+WSA_URI: str = 'http://schemas.xmlsoap.org/ws/2004/08/addressing'
+WSD_URI: str = 'http://schemas.xmlsoap.org/ws/2005/04/discovery'
+WSDP_URI: str = 'http://schemas.xmlsoap.org/ws/2006/02/devprof'
 
-namespaces = {
+namespaces: Dict[str, str] = {
     'soap': 'http://www.w3.org/2003/05/soap-envelope',
     'wsa': WSA_URI,
     'wsd': WSD_URI,
@@ -199,66 +352,69 @@ namespaces = {
     'pub': 'http://schemas.microsoft.com/windows/pub/2005/07'
 }
 
-WSD_MAX_KNOWN_MESSAGES = 10
+WSD_MAX_KNOWN_MESSAGES: int = 10
 
-WSD_PROBE = WSD_URI + '/Probe'
-WSD_PROBE_MATCH = WSD_URI + '/ProbeMatches'
-WSD_RESOLVE = WSD_URI + '/Resolve'
-WSD_RESOLVE_MATCH = WSD_URI + '/ResolveMatches'
-WSD_HELLO = WSD_URI + '/Hello'
-WSD_BYE = WSD_URI + '/Bye'
-WSD_GET = 'http://schemas.xmlsoap.org/ws/2004/09/transfer/Get'
-WSD_GET_RESPONSE = 'http://schemas.xmlsoap.org/ws/2004/09/transfer/GetResponse'
+WSD_PROBE: str = WSD_URI + '/Probe'
+WSD_PROBE_MATCH: str = WSD_URI + '/ProbeMatches'
+WSD_RESOLVE: str = WSD_URI + '/Resolve'
+WSD_RESOLVE_MATCH: str = WSD_URI + '/ResolveMatches'
+WSD_HELLO: str = WSD_URI + '/Hello'
+WSD_BYE: str = WSD_URI + '/Bye'
+WSD_GET: str = 'http://schemas.xmlsoap.org/ws/2004/09/transfer/Get'
+WSD_GET_RESPONSE: str = 'http://schemas.xmlsoap.org/ws/2004/09/transfer/GetResponse'
 
-WSD_TYPE_DEVICE = 'wsdp:Device'
-PUB_COMPUTER = 'pub:Computer'
-WSD_TYPE_DEVICE_COMPUTER = '{0} {1}'.format(WSD_TYPE_DEVICE, PUB_COMPUTER)
+WSD_TYPE_DEVICE: str = 'wsdp:Device'
+PUB_COMPUTER: str = 'pub:Computer'
+WSD_TYPE_DEVICE_COMPUTER: str = '{0} {1}'.format(WSD_TYPE_DEVICE, PUB_COMPUTER)
 
-WSD_MCAST_GRP_V4 = '239.255.255.250'
-WSD_MCAST_GRP_V6 = 'ff02::c'  # link-local
+WSD_MCAST_GRP_V4: str = '239.255.255.250'
+WSD_MCAST_GRP_V6: str = 'ff02::c'  # link-local
 
-WSA_ANON = WSA_URI + '/role/anonymous'
-WSA_DISCOVERY = 'urn:schemas-xmlsoap-org:ws:2005:04:discovery'
+WSA_ANON: str = WSA_URI + '/role/anonymous'
+WSA_DISCOVERY: str = 'urn:schemas-xmlsoap-org:ws:2005:04:discovery'
 
-MIME_TYPE_SOAP_XML = 'application/soap+xml'
+MIME_TYPE_SOAP_XML: str = 'application/soap+xml'
 
 # protocol assignments (WSD spec/Section 2.4)
-WSD_UDP_PORT = 3702
-WSD_HTTP_PORT = 5357
-WSD_MAX_LEN = 32767
+WSD_UDP_PORT: int = 3702
+WSD_HTTP_PORT: int = 5357
+WSD_MAX_LEN: int = 32767
 
 WSDD_LISTEN_PORT = 5359
 
 # SOAP/UDP transmission constants
-MULTICAST_UDP_REPEAT = 4
-UNICAST_UDP_REPEAT = 2
-UDP_MIN_DELAY = 50
-UDP_MAX_DELAY = 250
-UDP_UPPER_DELAY = 500
+MULTICAST_UDP_REPEAT: int = 4
+UNICAST_UDP_REPEAT: int = 2
+UDP_MIN_DELAY: int = 50
+UDP_MAX_DELAY: int = 250
+UDP_UPPER_DELAY: int = 500
 
 # servers must recond in 4 seconds after probe arrives
-PROBE_TIMEOUT = 4
-MAX_STARTUP_PROBE_DELAY = 3
+PROBE_TIMEOUT: int = 4
+MAX_STARTUP_PROBE_DELAY: int = 3
 
 # some globals
-wsd_instance_id = int(time.time())
-send_queue = []
+wsd_instance_id: int = int(time.time())
 
-args = None
-logger = None
+WSDMessage = Tuple[ElementTree.Element, str]
+MessageTypeHandler = Callable[[ElementTree.Element, ElementTree.Element], Optional[WSDMessage]]
 
 
-class WSDMessageHandler(object):
-    known_messages = collections.deque([], WSD_MAX_KNOWN_MESSAGES)
+class WSDMessageHandler(INetworkPacketHandler):
+    known_messages: Deque[str] = collections.deque([], WSD_MAX_KNOWN_MESSAGES)
 
-    def __init__(self):
+    handlers: Dict[str, MessageTypeHandler]
+    pending_tasks: List[asyncio.Task]
+
+    def __init__(self) -> None:
         self.handlers = {}
+        self.pending_tasks = []
 
     def cleanup(self):
         pass
 
     # shortcuts for building WSD responses
-    def add_endpoint_reference(self, parent, endpoint=None):
+    def add_endpoint_reference(self, parent: ElementTree.Element, endpoint: str = None) -> None:
         epr = ElementTree.SubElement(parent, 'wsa:EndpointReference')
         address = ElementTree.SubElement(epr, 'wsa:Address')
         if endpoint is None:
@@ -266,29 +422,29 @@ class WSDMessageHandler(object):
         else:
             address.text = endpoint
 
-    def add_metadata_version(self, parent):
+    def add_metadata_version(self, parent: ElementTree.Element) -> None:
         meta_data = ElementTree.SubElement(parent, 'wsd:MetadataVersion')
         meta_data.text = '1'
 
-    def add_types(self, parent):
+    def add_types(self, parent: ElementTree.Element) -> None:
         dev_type = ElementTree.SubElement(parent, 'wsd:Types')
         dev_type.text = WSD_TYPE_DEVICE_COMPUTER
 
-    def add_xaddr(self, parent, transport_addr):
+    def add_xaddr(self, parent: ElementTree.Element, transport_addr: str) -> None:
         if transport_addr:
             item = ElementTree.SubElement(parent, 'wsd:XAddrs')
-            item.text = 'http://{0}:{1}/{2}'.format(
-                transport_addr, WSD_HTTP_PORT, args.uuid)
+            item.text = 'http://{0}:{1}/{2}'.format(transport_addr, WSD_HTTP_PORT, args.uuid)
 
-    def build_message(self, to_addr, action_str, request_header, response):
-        retval = self.xml_to_buffer(self.build_message_tree(
-            to_addr, action_str, request_header, response)[0])
+    def build_message(self, to_addr: str, action_str: str, request_header: Optional[ElementTree.Element],
+                      response: ElementTree.Element) -> str:
+        retval = self.xml_to_str(self.build_message_tree(to_addr, action_str, request_header, response)[0])
 
         logger.debug('constructed xml for WSD message: {0}'.format(retval))
 
         return retval
 
-    def build_message_tree(self, to_addr, action_str, request_header, body):
+    def build_message_tree(self, to_addr: str, action_str: str, request_header: Optional[ElementTree.Element],
+                           body: Optional[ElementTree.Element]) -> Tuple[ElementTree.Element, str]:
         """
         Build a WSD message with a given action string including SOAP header.
 
@@ -325,23 +481,30 @@ class WSDMessageHandler(object):
 
         return root, msg_id.text
 
-    def add_header_elements(self, header, extra):
+    def add_header_elements(self, header: ElementTree.Element, extra: Any) -> None:
         pass
 
-    def handle_message(self, msg, mch, src_address):
+    def handle_message(self, msg: str, src: Optional[UdpAddress] = None) -> Optional[str]:
         """
-        handle a WSD message that might be received by a MulticastHandler
+        handle a WSD message
         """
-        tree = ElementTree.fromstring(msg)
+        try:
+            tree = ETfromString(msg)
+        except ElementTree.ParseError:
+            return None
+
         header = tree.find('./soap:Header', namespaces)
+        if header is None:
+            return None
+
         msg_id_tag = header.find('./wsa:MessageID', namespaces)
         if msg_id_tag is None:
             return None
 
-        msg_id = msg_id_tag.text
+        msg_id = str(msg_id_tag.text)
 
-        # if message came over a MulticastHandler, check for duplicates
-        if mch and self.is_duplicated_msg(msg_id):
+        # check for duplicates
+        if self.is_duplicated_msg(msg_id):
             logger.debug('known message ({0}): dropping it'.format(msg_id))
             return None
 
@@ -349,18 +512,15 @@ class WSDMessageHandler(object):
         if action_tag is None:
             return None
 
-        action = action_tag.text
+        action: str = str(action_tag.text)
         _, _, action_method = action.rpartition('/')
 
-        if mch:
+        if src:
             logger.info('{}:{}({}) - - "{} {} UDP" - -'.format(
-                src_address[0], src_address[1], mch.interface.name,
-                action_method, msg_id
-            ))
+                src.transport_str, src.port, src.interface, action_method, msg_id))
         else:
             # http logging is already done by according server
-            logger.debug('processing WSD {} message ({})'.format(
-                action_method, msg_id))
+            logger.debug('processing WSD {} message ({})'.format(action_method, msg_id))
 
         body = tree.find('./soap:Body', namespaces)
         if body is None:
@@ -372,14 +532,13 @@ class WSDMessageHandler(object):
             retval = handler(header, body)
             if retval is not None:
                 response, response_type = retval
-                return self.build_message(
-                    WSA_ANON, response_type, header, response)
+                return self.build_message(WSA_ANON, response_type, header, response)
         else:
             logger.debug('unhandled action {0}/{1}'.format(action, msg_id))
 
         return None
 
-    def is_duplicated_msg(self, msg_id):
+    def is_duplicated_msg(self, msg_id: str) -> bool:
         """
         Check for a duplicated message.
 
@@ -392,9 +551,9 @@ class WSDMessageHandler(object):
 
         return False
 
-    def xml_to_buffer(self, xml):
-        retval = b'<?xml version="1.0" encoding="utf-8"?>'
-        retval = retval + ElementTree.tostring(xml, encoding='utf-8')
+    def xml_to_str(self, xml: ElementTree.Element) -> str:
+        retval = '<?xml version="1.0" encoding="utf-8"?>'
+        retval = retval + ElementTree.tostring(xml, encoding='utf-8').decode('utf-8')
 
         return retval
 
@@ -404,82 +563,112 @@ class WSDUDPMessageHandler(WSDMessageHandler):
     A message handler that handles traffic received via MutlicastHandler.
     """
 
-    def __init__(self, mch):
+    mch: MulticastHandler
+    tearing_down: bool
+
+    def __init__(self, mch: MulticastHandler) -> None:
         super().__init__()
 
         self.mch = mch
+        self.tearing_down = False
 
     def teardown(self):
-        pass
+        self.tearing_down = True
 
-    def enqueue_datagram(self, msg, address=None, msg_type=None):
+    def send_datagram(self, msg: str, dst: UdpAddress) -> None:
+        try:
+            self.mch.send(msg.encode('utf-8'), dst)
+        except Exception as e:
+            logger.error('error while sending packet on {}: {}'.format(self.mch.address.interface, e))
+
+    def enqueue_datagram(self, msg: str, address: UdpAddress, msg_type: Optional[str] = None) -> None:
+        if msg_type:
+            logger.info('scheduling {0} message via {1} to {2}'.format(msg_type, address.interface, address))
+
+        schedule_task = self.mch.aio_loop.create_task(self.schedule_datagram(msg, address))
+        # Add this task to the pending list during teardown to wait during shutdown
+        if self.tearing_down:
+            self.pending_tasks.append(schedule_task)
+
+    async def schedule_datagram(self, msg: str, address: UdpAddress) -> None:
         """
-        Add an outgoing WSD (SOAP) message to the queue of outstanding messages
+        Schedule to send the given message to the given address.
 
         Implements SOAP over UDP, Appendix I.
         """
-        if not address:
-            address = self.mch.multicast_address
 
-        if msg_type:
-            logger.debug('scheduling {0} message via {1} to {2}'.format(
-                msg_type, self.mch.interface.name, address))
+        self.send_datagram(msg, address)
 
-        msg_count = (
-            MULTICAST_UDP_REPEAT
-            if address == self.mch.multicast_address
-            else UNICAST_UDP_REPEAT)
-
-        due_time = time.time()
-        t = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
-        for i in range(msg_count):
-            send_queue.append([due_time, self.mch, address, msg])
-            due_time += t / 1000
-            t = min(t * 2, UDP_UPPER_DELAY)
+        delta = 0
+        msg_count = MULTICAST_UDP_REPEAT if address == self.mch.multicast_address else UNICAST_UDP_REPEAT
+        delta = random.randint(UDP_MIN_DELAY, UDP_MAX_DELAY)
+        for i in range(msg_count - 1):
+            await asyncio.sleep(delta / 1000.0)
+            self.send_datagram(msg, address)
+            delta = min(delta * 2, UDP_UPPER_DELAY)
 
 
-class WSDDiscoveredDevice(object):
+class WSDDiscoveredDevice:
 
-    def __init__(self, xml_str, xaddr, interface):
-        self.last_seen = None
+    # a dict of discovered devices with their UUID as key
+    instances: Dict[str, 'WSDDiscoveredDevice'] = {}
+
+    addresses: Dict[str, Set[str]]
+    props: Dict[str, str]
+    display_name: str
+    last_seen: float
+
+    def __init__(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
+        self.last_seen = 0.0
         self.addresses = {}
         self.props = {}
+        self.display_name = ''
 
         self.update(xml_str, xaddr, interface)
 
-    def update(self, xml_str, xaddr, interface):
-        tree = ElementTree.fromstring(xml_str)
+    def update(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
+        try:
+            tree = ETfromString(xml_str)
+        except ElementTree.ParseError:
+            return None
         mds_path = 'soap:Body/wsx:Metadata/wsx:MetadataSection'
         sections = tree.findall(mds_path, namespaces)
         for section in sections:
             dialect = section.attrib['Dialect']
             if dialect == WSDP_URI + '/ThisDevice':
-                self.extract_wsdp_props(section, self.props, dialect)
+                self.extract_wsdp_props(section, dialect)
             elif dialect == WSDP_URI + '/ThisModel':
-                self.extract_wsdp_props(section, self.props, dialect)
+                self.extract_wsdp_props(section, dialect)
             elif dialect == WSDP_URI + '/Relationship':
-                host_xpath = ('wsdp:Relationship[@Type="{}/host"]/wsdp:Host'
-                              .format(WSDP_URI))
+                host_xpath = 'wsdp:Relationship[@Type="{}/host"]/wsdp:Host'.format(WSDP_URI)
                 host_sec = section.find(host_xpath, namespaces)
                 if (host_sec):
-                    self.extract_host_props(host_sec, self.props)
+                    self.extract_host_props(host_sec)
             else:
                 logger.debug('unknown metadata dialect ({})'.format(dialect))
 
         url = urllib.parse.urlparse(xaddr)
         addr, _, _ = url.netloc.rpartition(':')
-        if interface not in self.addresses:
-            self.addresses[interface] = set([addr])
+        report = True
+        if interface.name not in self.addresses:
+            self.addresses[interface.name] = set([addr])
         else:
-            self.addresses[interface].add(addr)
+            if addr not in self.addresses[interface.name]:
+                self.addresses[interface.name].add(addr)
+            else:
+                report = False
 
         self.last_seen = time.time()
-        logger.info('discovered {} in {} on {}%{}'.format(
-            self.props['DisplayName'], self.props['BelongsTo'], addr,
-            interface.interface.name))
+        if ('DisplayName' in self.props) and ('BelongsTo' in self.props) and (report):
+            self.display_name = self.props['DisplayName']
+            logger.info('discovered {} in {} on {}'.format(self.display_name, self.props['BelongsTo'], addr))
+        elif ('FriendlyName' in self.props) and (report):
+            self.display_name = self.props['FriendlyName']
+            logger.info('discovered {} on {}'.format(self.display_name, addr))
+
         logger.debug(str(self.props))
 
-    def extract_wsdp_props(self, root, target_dict, dialect):
+    def extract_wsdp_props(self, root: ElementTree.Element, dialect: str) -> None:
         _, _, propsRoot = dialect.rpartition('/')
         # XPath support is limited, so filter by namespace on our own
         nodes = root.findall('./wsdp:{0}/*'.format(propsRoot), namespaces)
@@ -487,29 +676,33 @@ class WSDDiscoveredDevice(object):
         prop_nodes = [n for n in nodes if n.tag.startswith(ns_prefix)]
         for node in prop_nodes:
             tag_name = node.tag[len(ns_prefix):]
-            target_dict[tag_name] = node.text
+            self.props[tag_name] = str(node.text)
 
-    def extract_host_props(self, root, target_dict):
+    def extract_host_props(self, root: ElementTree.Element) -> None:
         types = root.findtext('wsdp:Types', '', namespaces)
-        target_dict['types'] = types.split(' ')
+        self.props['types'] = types.split(' ')[0]
         if types != PUB_COMPUTER:
             return
 
         comp = root.findtext(PUB_COMPUTER, '', namespaces)
-        target_dict['DisplayName'], _, target_dict['BelongsTo'] = (
+        self.props['DisplayName'], _, self.props['BelongsTo'] = (
             comp.partition('/'))
 
 
 class WSDClient(WSDUDPMessageHandler):
 
-    def __init__(self, mch, known_devices):
+    instances: ClassVar[List['WSDClient']] = []
+    probes: Dict[str, float]
+
+    def __init__(self, mch: MulticastHandler) -> None:
         super().__init__(mch)
 
-        self.mch.add_handler(self.mch.send_socket, self)
+        WSDClient.instances.append(self)
+
+        self.mch.add_handler(self.mch.mc_send_socket, self)
         self.mch.add_handler(self.mch.recv_socket, self)
 
         self.probes = {}
-        self.known_devices = known_devices
 
         self.handlers[WSD_HELLO] = self.handle_hello
         self.handlers[WSD_BYE] = self.handle_bye
@@ -520,11 +713,14 @@ class WSDClient(WSDUDPMessageHandler):
         time.sleep(random.randint(0, MAX_STARTUP_PROBE_DELAY))
         self.send_probe()
 
-    def cleanup(self):
-        self.mch.remove_handler(self.mch.send_socket, self)
+    def cleanup(self) -> None:
+        super().cleanup()
+        WSDClient.instances.remove(self)
+
+        self.mch.remove_handler(self.mch.mc_send_socket, self)
         self.mch.remove_handler(self.mch.recv_socket, self)
 
-    def send_probe(self):
+    def send_probe(self) -> None:
         """WS-Discovery, Section 4.3, Probe message"""
         self.remove_outdated_probes()
 
@@ -532,36 +728,53 @@ class WSDClient(WSDUDPMessageHandler):
         ElementTree.SubElement(probe, 'wsd:Types').text = WSD_TYPE_DEVICE
 
         xml, i = self.build_message_tree(WSA_DISCOVERY, WSD_PROBE, None, probe)
-        self.enqueue_datagram(self.xml_to_buffer(xml), msg_type='Probe')
+        self.enqueue_datagram(self.xml_to_str(xml), self.mch.multicast_address, msg_type='Probe')
         self.probes[i] = time.time()
 
-    def teardown(self):
+    def teardown(self) -> None:
+        super().teardown()
         self.remove_outdated_probes()
 
-    def handle_request(self, msg, address):
-        self.handle_message(msg, self.mch, address)
+    def handle_packet(self, msg: str, src: UdpAddress = None) -> None:
+        self.handle_message(msg, src)
 
-    def handle_hello(self, header, body):
+    def handle_hello(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         pm_path = 'wsd:Hello'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, pm_path)
         if not xaddrs:
             logger.info('Hello without XAddrs, sending resolve')
-            msg = self.build_resolve_message(endpoint)
-            self.enqueue_datagram(msg)
-            return
+            msg = self.build_resolve_message(str(endpoint))
+            self.enqueue_datagram(msg, self.mch.multicast_address)
+            return None
 
-        xaddr = xaddrs.strip()
+        xaddr = None
+        for addr in xaddrs.strip().split():
+            if (self.mch.address.family == socket.AF_INET6) and ('//[fe80::' in addr):
+                # use first link-local address for IPv6
+                xaddr = addr
+                break
+            elif self.mch.address.family == socket.AF_INET:
+                # use first (and very likely the only) IPv4 address
+                xaddr = addr
+                break
+
+        if xaddr is None:
+            return None
+
         logger.info('Hello from {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
+        return None
 
-    def handle_bye(self, header, body):
+    def handle_bye(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         bye_path = 'wsd:Bye'
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
         device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in self.known_devices:
-            del(self.known_devices[device_uuid])
+        if device_uuid in WSDDiscoveredDevice.instances:
+            del(WSDDiscoveredDevice.instances[device_uuid])
 
-    def handle_probe_match(self, header, body):
+        return None
+
+    def handle_probe_match(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         # do not handle to probematches issued not sent by ourself
         rel_msg = header.findtext('wsa:RelatesTo', None, namespaces)
         if rel_msg not in self.probes:
@@ -573,32 +786,36 @@ class WSDClient(WSDUDPMessageHandler):
         endpoint, xaddrs = self.extract_endpoint_metadata(body, pm_path)
         if not xaddrs:
             logger.debug('probe match without XAddrs, sending resolve')
-            msg = self.build_resolve_message(endpoint)
-            self.enqueue_datagram(msg)
-            return
+            msg = self.build_resolve_message(str(endpoint))
+            self.enqueue_datagram(msg, self.mch.multicast_address)
+            return None
 
         xaddr = xaddrs.strip()
         logger.debug('probe match for {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
 
-    def build_resolve_message(self, endpoint):
+        return None
+
+    def build_resolve_message(self, endpoint: str) -> str:
         resolve = ElementTree.Element('wsd:Resolve')
         self.add_endpoint_reference(resolve, endpoint)
 
         return self.build_message(WSA_DISCOVERY, WSD_RESOLVE, None, resolve)
 
-    def handle_resolve_match(self, header, body):
+    def handle_resolve_match(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         rm_path = 'wsd:ResolveMatches/wsd:ResolveMatch'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, rm_path)
         if not endpoint or not xaddrs:
             logger.debug('resolve match without endpoint/xaddr')
-            return
+            return None
 
         xaddr = xaddrs.strip()
         logger.debug('resolve match for {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
 
-    def extract_endpoint_metadata(self, body, prefix):
+        return None
+
+    def extract_endpoint_metadata(self, body: ElementTree.Element, prefix: str) -> Tuple[Optional[str], Optional[str]]:
         prefix = prefix + '/'
         addr_path = 'wsa:EndpointReference/wsa:Address'
 
@@ -607,19 +824,19 @@ class WSDClient(WSDUDPMessageHandler):
 
         return endpoint, xaddrs
 
-    def perform_metadata_exchange(self, endpoint, xaddr):
+    def perform_metadata_exchange(self, endpoint, xaddr: str):
         if not (xaddr.startswith('http://') or xaddr.startswith('https://')):
             logger.debug('invalid XAddr: {}'.format(xaddr))
             return
 
         host = None
         url = xaddr
-        if self.mch.family == socket.AF_INET6:
+        if self.mch.address.family == socket.AF_INET6:
             host = '[{}]'.format(url.partition('[')[2].partition(']')[0])
-            url = url.replace(']', '%{}]'.format(self.mch.interface.name))
+            url = url.replace(']', '%{}]'.format(self.mch.address.interface))
 
         body = self.build_getmetadata_message(endpoint)
-        request = urllib.request.Request(url, data=body, method='POST')
+        request = urllib.request.Request(url, data=body.encode('utf-8'), method='POST')
         request.add_header('Content-Type', 'application/soap+xml')
         request.add_header('User-Agent', 'wsdd')
         if host is not None:
@@ -629,26 +846,24 @@ class WSDClient(WSDUDPMessageHandler):
             with urllib.request.urlopen(request, None, 2.0) as stream:
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
-            logger.warning('could not fetch metadata from: {} {}'.format(
-                url, e))
+            logger.warning('could not fetch metadata from: {} {}'.format(url, e))
 
-    def build_getmetadata_message(self, endpoint):
+    def build_getmetadata_message(self, endpoint) -> str:
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
-        return self.xml_to_buffer(tree)
+        return self.xml_to_str(tree)
 
-    def handle_metadata(self, meta, endpoint, xaddr):
+    def handle_metadata(self, meta: str, endpoint: str, xaddr: str) -> None:
         device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in self.known_devices:
-            self.known_devices[device_uuid].update(meta, xaddr, self.mch)
+        if device_uuid in WSDDiscoveredDevice.instances:
+            WSDDiscoveredDevice.instances[device_uuid].update(meta, xaddr, self.mch.address.interface)
         else:
-            self.known_devices[device_uuid] = WSDDiscoveredDevice(
-                    meta, xaddr, self.mch)
+            WSDDiscoveredDevice.instances[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch.address.interface)
 
-    def remove_outdated_probes(self):
+    def remove_outdated_probes(self) -> None:
         cut = time.time() - PROBE_TIMEOUT * 2
         self.probes = dict(filter(lambda x: x[1] > cut, self.probes.items()))
 
-    def add_header_elements(self, header, extra):
+    def add_header_elements(self, header: ElementTree.Element, extra: Any) -> None:
         action_str = extra
         if action_str == WSD_GET:
             reply_to = ElementTree.SubElement(header, 'wsa:ReplyTo')
@@ -663,10 +878,13 @@ class WSDClient(WSDUDPMessageHandler):
 class WSDHost(WSDUDPMessageHandler):
     """Class for handling WSD requests coming from UDP datagrams."""
 
-    message_number = 0
+    message_number: ClassVar[int] = 0
+    instances: ClassVar[List['WSDHost']] = []
 
-    def __init__(self, mch):
+    def __init__(self, mch: MulticastHandler) -> None:
         super().__init__(mch)
+
+        WSDHost.instances.append(self)
 
         self.mch.add_handler(self.mch.recv_socket, self)
 
@@ -675,36 +893,43 @@ class WSDHost(WSDUDPMessageHandler):
 
         self.send_hello()
 
-    def teardown(self):
+    def cleanup(self) -> None:
+        super().cleanup()
+        WSDHost.instances.remove(self)
+
+    def teardown(self) -> None:
+        super().teardown()
         self.send_bye()
 
-    def handle_request(self, msg, address):
-        reply = self.handle_message(msg, self.mch, address)
+    def handle_packet(self, msg: str, src: UdpAddress) -> None:
+        reply = self.handle_message(msg, src)
         if reply:
-            self.enqueue_datagram(reply, address=address)
+            self.enqueue_datagram(reply, src)
 
-    def send_hello(self):
+    def send_hello(self) -> None:
         """WS-Discovery, Section 4.1, Hello message"""
         hello = ElementTree.Element('wsd:Hello')
         self.add_endpoint_reference(hello)
-        # THINK: Microsoft does not send the transport address here due
-        # to privacy reasons. Could make this optional.
-        self.add_xaddr(hello, self.mch.transport_address)
+        # THINK: Microsoft does not send the transport address here due to privacy reasons. Could make this optional.
+        self.add_xaddr(hello, self.mch.address.transport_str)
         self.add_metadata_version(hello)
 
         msg = self.build_message(WSA_DISCOVERY, WSD_HELLO, None, hello)
-        self.enqueue_datagram(msg, msg_type='Hello')
+        self.enqueue_datagram(msg, self.mch.multicast_address, msg_type='Hello')
 
-    def send_bye(self):
+    def send_bye(self) -> None:
         """WS-Discovery, Section 4.2, Bye message"""
         bye = ElementTree.Element('wsd:Bye')
         self.add_endpoint_reference(bye)
 
         msg = self.build_message(WSA_DISCOVERY, WSD_BYE, None, bye)
-        self.enqueue_datagram(msg, msg_type='Bye')
+        self.enqueue_datagram(msg, self.mch.multicast_address, msg_type='Bye')
 
-    def handle_probe(self, header, body):
+    def handle_probe(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         probe = body.find('./wsd:Probe', namespaces)
+        if probe is None:
+            return None
+
         scopes = probe.find('./wsd:Scopes', namespaces)
 
         if scopes:
@@ -730,29 +955,31 @@ class WSDHost(WSDUDPMessageHandler):
 
         return matches, WSD_PROBE_MATCH
 
-    def handle_resolve(self, header, body):
+    def handle_resolve(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         resolve = body.find('./wsd:Resolve', namespaces)
+        if resolve is None:
+            return None
+
         addr = resolve.find('./wsa:EndpointReference/wsa:Address', namespaces)
         if addr is None:
             logger.debug('invalid resolve request: missing endpoint address')
             return None
 
         if not addr.text == args.uuid.urn:
-            logger.debug(
-                'invalid resolve request: address ({}) does not '
-                'match own one ({})'.format(addr.text, args.uuid.urn))
+            logger.debug('invalid resolve request: address ({}) does not match own one ({})'.format(
+                addr.text, args.uuid.urn))
             return None
 
         matches = ElementTree.Element('wsd:ResolveMatches')
         match = ElementTree.SubElement(matches, 'wsd:ResolveMatch')
         self.add_endpoint_reference(match)
         self.add_types(match)
-        self.add_xaddr(match, self.mch.transport_address)
+        self.add_xaddr(match, self.mch.address.transport_str)
         self.add_metadata_version(match)
 
         return matches, WSD_RESOLVE_MATCH
 
-    def add_header_elements(self, header, extra):
+    def add_header_elements(self, header: ElementTree.Element, extra: Any):
         ElementTree.SubElement(header, 'wsd:AppSequence', {
             'InstanceId': str(wsd_instance_id),
             'SequenceId': uuid.uuid1().urn,
@@ -763,35 +990,30 @@ class WSDHost(WSDUDPMessageHandler):
 
 class WSDHttpMessageHandler(WSDMessageHandler):
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         self.handlers[WSD_GET] = self.handle_get
 
-    def handle_get(self, header, body):
+    def handle_get(self, header: ElementTree.Element, body: ElementTree.Element) -> WSDMessage:
         # see https://msdn.microsoft.com/en-us/library/hh441784.aspx for an
         # example. Some of the properties below might be made configurable
         # in future releases.
         metadata = ElementTree.Element('wsx:Metadata')
-        section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {
-            'Dialect': WSDP_URI + '/ThisDevice'})
+        section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {'Dialect': WSDP_URI + '/ThisDevice'})
         device = ElementTree.SubElement(section, 'wsdp:ThisDevice')
-        ElementTree.SubElement(device, 'wsdp:FriendlyName').text = (
-                'WSD Device {0}'.format(args.hostname))
+        ElementTree.SubElement(device, 'wsdp:FriendlyName').text = ('WSD Device {0}'.format(args.hostname))
         ElementTree.SubElement(device, 'wsdp:FirmwareVersion').text = '1.0'
         ElementTree.SubElement(device, 'wsdp:SerialNumber').text = '1'
 
-        section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {
-            'Dialect': WSDP_URI + '/ThisModel'})
+        section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {'Dialect': WSDP_URI + '/ThisModel'})
         model = ElementTree.SubElement(section, 'wsdp:ThisModel')
         ElementTree.SubElement(model, 'wsdp:Manufacturer').text = 'wsdd'
         ElementTree.SubElement(model, 'wsdp:ModelName').text = 'wsdd'
         ElementTree.SubElement(model, 'pnpx:DeviceCategory').text = 'Computers'
 
-        section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {
-            'Dialect': WSDP_URI + '/Relationship'})
-        rel = ElementTree.SubElement(section, 'wsdp:Relationship', {
-            'Type': WSDP_URI + '/host'})
+        section = ElementTree.SubElement(metadata, 'wsx:MetadataSection', {'Dialect': WSDP_URI + '/Relationship'})
+        rel = ElementTree.SubElement(section, 'wsdp:Relationship', {'Type': WSDP_URI + '/host'})
         host = ElementTree.SubElement(rel, 'wsdp:Host')
         self.add_endpoint_reference(host)
         ElementTree.SubElement(host, 'wsdp:Types').text = PUB_COMPUTER
@@ -812,260 +1034,301 @@ class WSDHttpMessageHandler(WSDMessageHandler):
 class WSDHttpServer(http.server.HTTPServer):
     """ HTTP server both with IPv6 support and WSD handling """
 
-    def __init__(self, mch, RequestHandlerClass, addr_family, sel):
-        if addr_family == socket.AF_INET6:
-            type(self).address_family = addr_family
+    mch: MulticastHandler
+    aio_loop: asyncio.AbstractEventLoop
+    wsd_handler: WSDHttpMessageHandler
+    registered: bool
+
+    def __init__(self, mch: MulticastHandler, aio_loop: asyncio.AbstractEventLoop):
+        # hacky way to convince HTTP/SocketServer of the address family
+        type(self).address_family = mch.address.family
 
         self.mch = mch
-        self.selector = sel
+        self.aio_loop = aio_loop
         self.wsd_handler = WSDHttpMessageHandler()
         self.registered = False
 
-        super().__init__(mch.listen_address, RequestHandlerClass)
+        # WSDHttpRequestHandler is a BaseHTTPRequestHandler. Passing to the parent constructor is therefore safe and
+        # we can ignore the type error reported by mypy
+        super().__init__(mch.listen_address, WSDHttpRequestHandler)  # type: ignore
 
-    def server_bind(self):
-        if type(self).address_family == socket.AF_INET6:
+    def server_bind(self) -> None:
+        if self.mch.address.family == socket.AF_INET6:
             self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
         super().server_bind()
 
-    def server_activate(self):
+    def server_activate(self) -> None:
         super().server_activate()
-        self.selector.register(self.fileno(), selectors.EVENT_READ, self)
+        self.aio_loop.add_reader(self.fileno(), self.handle_request)
         self.registered = True
 
-    def server_close(self):
+    def server_close(self) -> None:
         if self.registered:
-            self.selector.unregister(self.fileno())
+            self.aio_loop.remove_reader(self.fileno())
         super().server_close()
 
 
 class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
     """Class for handling WSD requests coming over HTTP"""
 
-    def log_message(self, fmt, *args):
+    def log_message(self, fmt, *args) -> None:
         logger.info("{} - - ".format(self.address_string()) + fmt % args)
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         if self.path != '/' + str(args.uuid):
-            self.send_error()
+            self.send_error(http.HTTPStatus.NOT_FOUND)
 
         ct = self.headers['Content-Type']
         if ct is None or not ct.startswith(MIME_TYPE_SOAP_XML):
-            self.send_error(http.HTTPStatus.NOT_FOUND, 'Invalid Content-Type')
+            self.send_error(http.HTTPStatus.BAD_REQUEST, 'Invalid Content-Type')
 
         content_length = int(self.headers['Content-Length'])
         body = self.rfile.read(content_length)
 
-        response = self.server.wsd_handler.handle_message(body, None, None)
+        response = self.server.wsd_handler.handle_message(body)  # type: ignore
         if response:
             self.send_response(http.HTTPStatus.OK)
             self.send_header('Content-Type', MIME_TYPE_SOAP_XML)
             self.end_headers()
-            self.wfile.write(response)
+            self.wfile.write(response.encode('utf-8'))
         else:
             self.send_error(http.HTTPStatus.BAD_REQUEST)
 
 
-class ApiRequestHandler(socketserver.StreamRequestHandler):
+class ApiServer:
 
-    def handle(self):
-        line = str(self.rfile.readline().strip(), 'utf-8')
-        if not line:
+    address_monitor: 'NetworkAddressMonitor'
+
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: bytes,
+                 address_monitor: 'NetworkAddressMonitor') -> None:
+        self.server = None
+        self.address_monitor = address_monitor
+
+        # defer server creation
+        self.create_task = aio_loop.create_task(self.create_server(aio_loop, listen_address))
+
+    async def create_server(self, aio_loop: asyncio.AbstractEventLoop, listen_address: Any) -> None:
+
+        # It appears mypy is not able to check the argument to create_task and the return value of start_server
+        # correctly. The docs say start_server returns a coroutine and the create_task takes a coro. And: It works.
+        # Thus, we ignore type errors here.
+        if isinstance(listen_address, int) or listen_address.isnumeric():
+            self.server = await aio_loop.create_task(asyncio.start_server(self.on_connect, host='localhost',
+                                                     port=int(listen_address), loop=aio_loop, reuse_address=True,
+                                                     reuse_port=True))  # type: ignore
+        else:
+            self.server = await aio_loop.create_task(asyncio.start_unix_server(self.on_connect, path=listen_address,
+                                                     loop=aio_loop))  # type: ignore
+
+    async def on_connect(self, read_stream: asyncio.StreamReader, write_stream: asyncio.StreamWriter) -> None:
+        while True:
+            try:
+                line = await read_stream.readline()
+                if line:
+                    self.handle_command(str(line.strip(), 'utf-8'), write_stream)
+                    if not write_stream.is_closing():
+                        await write_stream.drain()
+                else:
+                    write_stream.close()
+                    return
+            except UnicodeDecodeError as e:
+                logger.debug('invalid input utf8', e)
+            except Exception as e:
+                logger.warning('exception in API client', e)
+                write_stream.close()
+                return
+
+    def handle_command(self, line: str, write_stream: asyncio.StreamWriter) -> None:
+        words = line.split()
+        if len(words) == 0:
             return
 
-        words = line.split()
         command = words[0]
-        args = words[1:]
-        if command == 'probe':
-            intf = args[0] if args else None
+        command_args = words[1:]
+        if command == 'probe' and args.discovery:
+            intf = command_args[0] if command_args else None
             logger.debug('probing devices on {} upon request'.format(intf))
             for client in self.get_clients_by_interface(intf):
                 client.send_probe()
-        elif command == 'clear':
+        elif command == 'clear' and args.discovery:
             logger.debug('clearing list of known devices')
-            self.server.wsd_known_devices.clear()
-        elif command == 'list':
-            self.wfile.write(bytes(self.get_list_reply(), 'utf-8'))
+            WSDDiscoveredDevice.instances.clear()
+        elif command == 'list' and args.discovery:
+            write_stream.write(bytes(self.get_list_reply(), 'utf-8'))
+        elif command == 'quit':
+            write_stream.close()
+        elif command == 'start':
+            self.address_monitor.enumerate()
+        elif command == 'stop':
+            self.address_monitor.teardown()
         else:
             logger.debug('could not handle API request: {}'.format(line))
 
-    def get_clients_by_interface(self, interface):
-        return [c for c in self.server.wsd_clients if
-                c.mch.interface.name == interface or not interface]
+    def get_clients_by_interface(self, interface: Optional[str]) -> List[WSDClient]:
+        return [c for c in WSDClient.instances if c.mch.address.interface.name == interface or not interface]
 
-    def get_list_reply(self):
+    def get_list_reply(self) -> str:
         retval = ''
-        for dev_uuid in self.server.wsd_known_devices:
-            dev = self.server.wsd_known_devices[dev_uuid]
+        for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
             addrs_str = []
-            for mci, addrs in dev.addresses.items():
-                addrs_str.append(', '.join(['{}%{}'.format(
-                    a, mci.interface.name) for a in addrs]))
+            for addrs in dev.addresses.items():
+                addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
                 dev_uuid,
-                dev.props['DisplayName'],
-                dev.props['BelongsTo'],
-                datetime.datetime.fromtimestamp(dev.last_seen).isoformat(
-                    'T', 'seconds'),
+                dev.display_name,
+                dev.props['BelongsTo'] if 'BelongsTo' in dev.props else '',
+                datetime.datetime.fromtimestamp(dev.last_seen).isoformat('T', 'seconds'),
                 ','.join(addrs_str))
 
+        retval += '.\n'
         return retval
 
-
-class ApiServer(object):
-
-    def __init__(self, selector, listen_address, clients, known_devices):
-        self.clients = clients
-
-        if isinstance(listen_address, int) or listen_address.isnumeric():
-            s_addr = ('localhost', int(listen_address))
-            socketserver.TCPServer.allow_reuse_address = True
-            s = socketserver.TCPServer(s_addr, ApiRequestHandler)
-        else:
-            s = socketserver.UnixStreamServer(
-                listen_address, ApiRequestHandler)
-
-        # quiet hacky
-        s.wsd_clients = clients
-        s.wsd_known_devices = known_devices
-
-        selector.register(s.fileno(), selectors.EVENT_READ, s)
-
-
-class NetworkInterface(object):
-
-    def __init__(self, name, scope):
-        self.name = name
-        self.scope = scope
+    async def cleanup(self) -> None:
+        # ensure the server is not created after we have teared down
+        await self.create_task
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
 
 
 class MetaEnumAfterInit(type):
 
-    def __call__(cls, *args, **kwargs):
-        obj = super().__call__(*args, **kwargs)
-        obj.enumerate()
+    def __call__(cls, *cargs, **kwargs):
+        obj = super().__call__(*cargs, **kwargs)
+        if not args.no_autostart:
+            obj.enumerate()
         return obj
 
 
-class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
+class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     """
     Observes changes of network addresses, handles addition and removal of
     network addresses, and filters for addresses/interfaces that are or are not
     handled. The actual OS-specific implementation that detects the changes is
-    done in subclasses.
+    done in subclasses. This class is used as a singleton
     """
 
-    def __init__(self, selector):
-        self.interfaces = {}
-        self.selector = selector
+    instance: ClassVar[object] = None
 
-        self.clients = []
-        self.hosts = []
+    interfaces: Dict[int, NetworkInterface]
+    aio_loop: asyncio.AbstractEventLoop
+    mchs: List[MulticastHandler]
+    http_servers: List[WSDHttpServer]
+    teardown_tasks: List[asyncio.Task]
+    active: bool
+
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
+
+        if NetworkAddressMonitor.instance is not None:
+            raise RuntimeError('Instance of NetworkAddressMonitor already created')
+
+        NetworkAddressMonitor.instance = self
+
+        self.interfaces = {}
+        self.aio_loop = aio_loop
+
         self.mchs = []
         self.http_servers = []
-        self.known_devices = {}
+        self.teardown_tasks = []
 
-    def enumerate(self):
+        self.active = False
+
+    def enumerate(self) -> None:
         """
         Performs an initial enumeration of addresses and sets up everything
         for observing future changes.
         """
+        if self.active:
+            return
+
+        self.active = True
+        self.do_enumerate()
+
+    def do_enumerate(self) -> None:
         pass
 
-    def handle_request(self):
+    def handle_change(self) -> None:
         """ handle network change message """
         pass
 
-    def add_interface(self, name, idx, scope):
-        if idx in self.interfaces:
-            self.interfaces[idx].name = name
+    def add_interface(self, interface: NetworkInterface) -> NetworkInterface:
+        # TODO: Cleanup
+        if interface.index in self.interfaces:
+            pass
+            # self.interfaces[idx].name = name
         else:
-            self.interfaces[idx] = NetworkInterface(name, scope)
+            self.interfaces[interface.index] = interface
 
-        return self.interfaces[idx]
+        return self.interfaces[interface.index]
 
-    def is_address_handled(self, addr, addr_family, interface):
-        """
-        Check if we should handle that address.
-        Address must be provided as raw address, i.e. byte array
-        """
-        if args.ipv4only and addr_family != socket.AF_INET:
-            return False
-        if args.ipv6only and addr_family != socket.AF_INET6:
+    def is_address_handled(self, address: NetworkAddress) -> bool:
+        # do not handle anything when we are not active
+        if not self.active:
             return False
 
-        # Nah, this check is not optimal but there are no local flags for
-        # addresses, but it should be safe for IPv4 anyways
-        # (https://tools.ietf.org/html/rfc5735#page-3)
-        if (addr_family == socket.AF_INET) and (addr[0] == 127):
+        # filter out address families we are not interested in
+        if args.ipv4only and address.family != socket.AF_INET:
             return False
-        if (addr_family == socket.AF_INET6) and (addr[0:2] != b'\xfe\x80'):
+        if args.ipv6only and address.family != socket.AF_INET6:
             return False
 
-        addr_str = socket.inet_ntop(addr_family, addr)
+        if address.is_multicastable:
+            return False
 
-        if (args.interface) and (interface.name not in args.interface) and (
-                addr_str not in args.interface):
+        # Use interface only if it's in the list of user-provided interface names
+        if ((args.interface) and (address.interface.name not in args.interface)
+                and (address.address_str not in args.interface)):
             return False
 
         return True
 
-    def handle_new_address(self, raw_addr, addr_family, interface):
-        addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.debug('new address {} on {}'.format(addr, interface.name))
+    def handle_new_address(self, address: NetworkAddress) -> None:
+        logger.debug('new address {}'.format(address))
 
-        if not self.is_address_handled(raw_addr, addr_family, interface):
-            logger.debug('ignoring that address on {}'.format(interface.name))
+        if not self.is_address_handled(address):
+            logger.debug('ignoring that address on {}'.format(address.interface))
             return
 
         # filter out what is not wanted
         # Ignore addresses or interfaces we already handle. There can only be
         # one multicast handler per address family and network interface
-        # However, multiple link-local addresses can be
         for mch in self.mchs:
-            if mch.handles(addr_family, addr, interface):
+            if mch.handles_address(address):
                 return
 
-        logger.debug('handling traffic for {} on {}'.format(
-            addr, interface.name))
-        mch = MulticastHandler(addr_family, addr, interface, self.selector)
+        logger.debug('handling traffic for {}'.format(address))
+        mch = MulticastHandler(address, self.aio_loop)
         self.mchs.append(mch)
 
         if not args.no_host:
-            h = WSDHost(mch)
-            self.hosts.append(h)
+            WSDHost(mch)
             if not args.no_http:
-                self.http_servers.append(WSDHttpServer(
-                    mch, WSDHttpRequestHandler, mch.family, self.selector))
+                self.http_servers.append(WSDHttpServer(mch, self.aio_loop))
 
         if args.discovery:
-            client = WSDClient(mch, self.known_devices)
-            self.clients.append(client)
+            WSDClient(mch)
 
-    def handle_deleted_address(self, raw_addr, addr_family, interface):
-        addr = socket.inet_ntop(addr_family, raw_addr)
-        logger.info('deleted address {} on {}'.format(addr, interface.name))
+    def handle_deleted_address(self, address: NetworkAddress) -> None:
+        logger.info('deleted address {}'.format(address))
 
-        if not self.is_address_handled(addr_family, raw_addr, interface):
+        if not self.is_address_handled(address):
             return
 
-        mch = self.get_mch_by_address(addr_family, addr, interface)
+        mch: Optional[MulticastHandler] = self.get_mch_by_address(address)
         if mch is None:
             return
 
         # Do not tear the client/hosts down. Saying goodbye does not work
         # because the address is already gone (at least on Linux).
-        for c in self.clients:
+        for c in WSDClient.instances:
             if c.mch == mch:
                 c.cleanup()
-                self.clients.remove(c)
                 break
-        for h in self.hosts:
+        for h in WSDHost.instances:
             if h.mch == mch:
                 h.cleanup()
-                self.hosts.remove(h)
                 break
         for s in self.http_servers:
             if s.mch == mch:
@@ -1075,60 +1338,98 @@ class NetworkAddressMonitor(object,  metaclass=MetaEnumAfterInit):
         mch.cleanup()
         self.mchs.remove(mch)
 
-    def cleanup(self):
+    def teardown(self) -> None:
+        if not self.active:
+            return
 
-        for h in self.hosts:
+        self.active = False
+
+        # return if we are still in tear down process
+        if len(self.teardown_tasks) > 0:
+            return
+
+        for h in WSDHost.instances:
             h.teardown()
             h.cleanup()
+            self.teardown_tasks.extend(h.pending_tasks)
 
-        for c in self.clients:
+        for c in WSDClient.instances:
             c.teardown()
             c.cleanup()
+            self.teardown_tasks.extend(c.pending_tasks)
 
-    def get_mch_by_address(self, family, address, interface):
+        for s in self.http_servers:
+            s.server_close()
+
+        self.http_servers.clear()
+
+        if not self.aio_loop.is_running():
+            # Wait here for all pending tasks so that the main loop can be finished on termination.
+            self.aio_loop.run_until_complete(asyncio.gather(*self.teardown_tasks))
+        else:
+            for t in self.teardown_tasks:
+                t.add_done_callback(self.mch_teardown)
+
+    def mch_teardown(self, task) -> None:
+        if any([not t.done() for t in self.teardown_tasks]):
+            return
+
+        self.teardown_tasks.clear()
+
+        for mch in self.mchs:
+            mch.cleanup()
+        self.mchs.clear()
+
+    def cleanup(self) -> None:
+        self.teardown()
+
+    def get_mch_by_address(self, address: NetworkAddress) -> Optional[MulticastHandler]:
         """
         Get the MCI for the address, its family and the interface.
         adress must be given as a string.
         """
         for retval in self.mchs:
-            if retval.handles(family, address, interface):
+            if retval.handles_address(address):
                 return retval
 
         return None
 
 
 # from rtnetlink.h
-RTMGRP_LINK = 1
-RTMGRP_IPV4_IFADDR = 0x10
-RTMGRP_IPV6_IFADDR = 0x100
+RTMGRP_LINK: int = 1
+RTMGRP_IPV4_IFADDR: int = 0x10
+RTMGRP_IPV6_IFADDR: int = 0x100
 
 # from netlink.h
-NLM_HDR_LEN = 16
+NLM_HDR_LEN: int = 16
 
-NLM_F_REQUEST = 0x01
-NLM_F_ROOT = 0x100
-NLM_F_MATCH = 0x200
-NLM_F_DUMP = NLM_F_ROOT | NLM_F_MATCH
+NLM_F_REQUEST: int = 0x01
+NLM_F_ROOT: int = 0x100
+NLM_F_MATCH: int = 0x200
+NLM_F_DUMP: int = NLM_F_ROOT | NLM_F_MATCH
 
 # self defines
-NLM_HDR_LEN = 16
-NLM_HDR_ALIGNTO = 4
+NLM_HDR_ALIGNTO: int = 4
 
 # ifa flags
-IFA_F_DADFAILED = 0x08
-IFA_F_HOMEADDRESS = 0x10
-IFA_F_DEPRECATED = 0x20
-IFA_F_TENTATIVE = 0x40
+IFA_F_DADFAILED: int = 0x08
+IFA_F_HOMEADDRESS: int = 0x10
+IFA_F_DEPRECATED: int = 0x20
+IFA_F_TENTATIVE: int = 0x40
 
 # from if_addr.h
-IFA_ADDRESS = 1
-IFA_LOCAL = 2
-IFA_LABEL = 3
-IFA_FLAGS = 8
-IFA_MSG_LEN = 8
+IFA_ADDRESS: int = 1
+IFA_LOCAL: int = 2
+IFA_LABEL: int = 3
+IFA_FLAGS: int = 8
+IFA_MSG_LEN: int = 8
 
-RTA_ALIGNTO = 4
-RTA_LEN = 4
+RTA_ALIGNTO: int = 4
+RTA_LEN: int = 4
+
+
+def align_to(x: int, n: int) -> int:
+    return ((x + n - 1) // n) * n
 
 
 class NetlinkAddressMonitor(NetworkAddressMonitor):
@@ -1136,12 +1437,14 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
     Implementation of the AddressMonitor for Netlink sockets, i.e. Linux
     """
 
-    RTM_NEWADDR = 20
-    RTM_DELADDR = 21
-    RTM_GETADDR = 22
+    RTM_NEWADDR: int = 20
+    RTM_DELADDR: int = 21
+    RTM_GETADDR: int = 22
 
-    def __init__(self, selector):
-        super().__init__(selector)
+    socket: socket.socket
+
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(aio_loop)
 
         rtm_groups = RTMGRP_LINK
         if not args.ipv4only:
@@ -1149,21 +1452,20 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
         if not args.ipv6only:
             rtm_groups = rtm_groups | RTMGRP_IPV4_IFADDR
 
-        self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW,
-                                    socket.NETLINK_ROUTE)
+        self.socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
         self.socket.bind((0, rtm_groups))
-        self.selector.register(self.socket, selectors.EVENT_READ, self)
+        self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
-    def enumerate(self):
-        super().enumerate()
+    def do_enumerate(self) -> None:
+        super().do_enumerate()
 
         kernel = (0, 0)
         req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, self.RTM_GETADDR,
                           NLM_F_REQUEST | NLM_F_DUMP, 1, 0, socket.AF_PACKET)
         self.socket.sendto(req, kernel)
 
-    def handle_request(self):
-        super().handle_request()
+    def handle_change(self) -> None:
+        super().handle_change()
 
         buf, src = self.socket.recvfrom(4096)
         logger.debug('netlink message with {} bytes'.format(len(buf)))
@@ -1171,6 +1473,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
         offset = 0
         while offset < len(buf):
             h_len, h_type, _, _, _ = struct.unpack_from('@IHHII', buf, offset)
+            offset += NLM_HDR_LEN
 
             msg_len = h_len - NLM_HDR_LEN
             if msg_len < 0:
@@ -1178,81 +1481,93 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
             if h_type != self.RTM_NEWADDR and h_type != self.RTM_DELADDR:
                 logger.debug('invalid rtm_message type {}'.format(h_type))
-                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
-            offset += NLM_HDR_LEN
             # decode ifaddrmsg as in rtnetlink.h
-            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(
-                '@BBBBI', buf, offset)
-            if (ifa_flags & IFA_F_DADFAILED or ifa_flags & IFA_F_HOMEADDRESS or
-               ifa_flags & IFA_F_DEPRECATED or ifa_flags & IFA_F_TENTATIVE):
-                logger.debug('ignore address with invalid state {}'.format(
-                    hex(ifa_flags)))
-                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from('@BBBBI', buf, offset)
+            if ((ifa_flags & IFA_F_DADFAILED) or (ifa_flags & IFA_F_HOMEADDRESS)
+                    or (ifa_flags & IFA_F_DEPRECATED) or (ifa_flags & IFA_F_TENTATIVE)):
+                logger.debug('ignore address with invalid state {}'.format(hex(ifa_flags)))
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
+            logger.debug('RTM new/del addr family: {} flags: {} scope: {} idx: {}'.format(
+                         ifa_family, ifa_flags, ifa_scope, ifa_idx))
             addr = None
             i = offset + IFA_MSG_LEN
             while i - offset < msg_len:
                 attr_len, attr_type = struct.unpack_from('HH', buf, i)
+                logger.debug('rt_attr {} {}'.format(attr_len, attr_type))
 
                 if attr_len < RTA_LEN:
+                    logger.debug('invalid rtm_attr_len. skipping remainder')
                     break
 
                 if attr_type == IFA_LABEL:
-                    name, = struct.unpack_from(str(attr_len - 4 - 1) + 's',
-                                               buf, i + 4)
-                    self.add_interface(name.decode(), ifa_idx, ifa_scope)
+                    name, = struct.unpack_from(str(attr_len - 4 - 1) + 's', buf, i + 4)
+                    self.add_interface(NetworkInterface(name.decode(), ifa_scope, ifa_idx))
                 elif attr_type == IFA_LOCAL and ifa_family == socket.AF_INET:
                     addr = buf[i + 4:i + 4 + 4]
-                elif (attr_type == IFA_ADDRESS and
-                        ifa_family == socket.AF_INET6):
+                elif attr_type == IFA_ADDRESS and ifa_family == socket.AF_INET6:
                     addr = buf[i + 4:i + 4 + 16]
                 elif attr_type == IFA_FLAGS:
                     _, ifa_flags = struct.unpack_from('HI', buf, i)
-                i += ((attr_len + 1) // RTA_ALIGNTO) * RTA_ALIGNTO
-                logger.debug('rt_attr {} {}'.format(attr_len, attr_type))
+                i += align_to(attr_len, RTA_ALIGNTO)
 
             if addr is None:
-                logger.debug('not address in RTM message')
-                offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+                logger.debug('no address in RTM message')
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
+            # In case of IPv6 only addresses, there appears to be no IFA_LABEL
+            # message. Therefore, the name is requested by other means (#94)
+            if ifa_idx not in self.interfaces:
+                try:
+                    logger.debug('unknown interface name for idx {}. resolving manually'.format(ifa_idx))
+                    if_name = socket.if_indextoname(ifa_idx)
+                    self.add_interface(NetworkInterface(if_name, ifa_scope, ifa_idx))
+                except OSError:
+                    logger.exception('interface detection failed')
+                    # accept this exception (which should not occur)
+                    pass
+
+            # In case really strange things happen and we could not find out the
+            # interface name for the returned ifa_idx, we... log a message.
             if ifa_idx in self.interfaces:
-                iface = self.interfaces[ifa_idx]
+                address = NetworkAddress(ifa_family, addr, self.interfaces[ifa_idx])
                 if h_type == self.RTM_NEWADDR:
-                    self.handle_new_address(addr, ifa_family, iface)
+                    self.handle_new_address(address)
                 elif h_type == self.RTM_DELADDR:
-                    self.handle_deleted_address(addr, ifa_family, iface)
+                    self.handle_deleted_address(address)
             else:
                 logger.debug('unknown interface index: {}'.format(ifa_idx))
 
-            offset += ((msg_len + 1) // NLM_HDR_ALIGNTO) * NLM_HDR_ALIGNTO
+            offset += align_to(msg_len, NLM_HDR_ALIGNTO)
 
-    def cleanup(self):
-        self.selector.unregister(self.socket)
+    def cleanup(self) -> None:
+        self.aio_loop.remove_reader(self.socket.fileno())
         self.socket.close()
         super().cleanup()
 
 
 # from sys/net/route.h
-RTA_IFA = 0x20
+RTA_IFA: int = 0x20
 
 # from sys/socket.h
-CTL_NET = 4
-NET_RT_IFLIST = 3
+CTL_NET: int = 4
+NET_RT_IFLIST: int = 3
 
 # from sys/net/if.h
-IFF_LOOPBACK = 0x8
-IFF_MULTICAST = 0x800
+IFF_LOOPBACK: int = 0x8
+IFF_MULTICAST: int = 0x800
 
 # sys/netinet6/in6_var.h
-IN6_IFF_TENTATIVE = 0x02
-IN6_IFF_DUPLICATED = 0x04
-IN6_IFF_NOTREADY = IN6_IFF_TENTATIVE | IN6_IFF_DUPLICATED
+IN6_IFF_TENTATIVE: int = 0x02
+IN6_IFF_DUPLICATED: int = 0x04
+IN6_IFF_NOTREADY: int = IN6_IFF_TENTATIVE | IN6_IFF_DUPLICATED
 
-SA_ALIGNTO = ctypes.sizeof(ctypes.c_long)
+SA_ALIGNTO: int = ctypes.sizeof(ctypes.c_long)
 
 
 class RouteSocketAddressMonitor(NetworkAddressMonitor):
@@ -1261,49 +1576,49 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     """
 
     # from sys/net/route.h
-    RTM_NEWADDR = 0xC
-    RTM_DELADDR = 0xD
-    RTM_IFINFO = 0xE
+    RTM_NEWADDR: int = 0xC
+    RTM_DELADDR: int = 0xD
+    RTM_IFINFO: int = 0xE
 
-    def __init__(self, selector):
-        super().__init__(selector)
+    socket: socket.socket
+    intf_blacklist: List[str]
+
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(aio_loop)
         self.intf_blacklist = []
 
         # Create routing socket to get notified about future changes.
         # Do this before fetching the current routing information to avoid
         # race condition.
-        self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW,
-                                    socket.AF_UNSPEC)
-        self.selector.register(self.socket, selectors.EVENT_READ, self)
+        self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
+        self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
-    def enumerate(self):
-        super().enumerate()
+    def do_enumerate(self) -> None:
+        super().do_enumerate()
         mib = [CTL_NET, socket.AF_ROUTE, 0, 0, NET_RT_IFLIST, 0]
         rt_mib = (ctypes.c_int * len(mib))()
-        rt_mib[:] = mib[:]
+        rt_mib[:] = [ctypes.c_int(m) for m in mib]
 
         libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
 
         # Ask kernel for routing table size first.
         rt_size = ctypes.c_size_t()
-        if libc.sysctl(ctypes.byref(rt_mib), ctypes.c_size_t(len(rt_mib)), 0,
-                       ctypes.byref(rt_size), 0, 0):
+        if libc.sysctl(ctypes.byref(rt_mib), ctypes.c_size_t(len(rt_mib)), 0, ctypes.byref(rt_size), 0, 0):
             raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 
         # Get the initial routing (interface list) data.
         rt_buf = ctypes.create_string_buffer(rt_size.value)
-        if libc.sysctl(ctypes.byref(rt_mib), ctypes.c_size_t(len(rt_mib)),
-                       rt_buf, ctypes.byref(rt_size), 0, 0):
+        if libc.sysctl(ctypes.byref(rt_mib), ctypes.c_size_t(len(rt_mib)), rt_buf, ctypes.byref(rt_size), 0, 0):
             raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 
         self.parse_route_socket_response(rt_buf.raw, True)
 
-    def handle_request(self):
-        super().handle_request()
+    def handle_change(self) -> None:
+        super().handle_change()
 
         self.parse_route_socket_response(self.socket.recv(4096), False)
 
-    def parse_route_socket_response(self, buf, keep_intf):
+    def parse_route_socket_response(self, buf: bytes, keep_intf: bool) -> None:
         offset = 0
 
         intf = None
@@ -1322,8 +1637,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                 intf_flags = flags
 
             # those offset may unfortunately be architecture dependent
-            sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO
-                                  else 20)
+            sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO else 20)
 
             # For a route socket message, and different to a sysctl response,
             # the link info is stored inside the same rtm message, so it has to
@@ -1331,25 +1645,22 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
             if not keep_intf:
                 intf = None
 
-            new_intf = self.parse_addrs(buf, sa_offset, offset + rtm_len,
-                                        intf, addr_mask, rtm_type, intf_flags)
+            new_intf = self.parse_addrs(buf, sa_offset, offset + rtm_len, intf, addr_mask, rtm_type, intf_flags)
             intf = new_intf if new_intf else intf
 
             offset += rtm_len
 
-    def parse_addrs(self, buf, offset, limit, intf, addr_mask, rtm_type,
-                    flags):
+    def parse_addrs(self, buf: bytes, offset: int, limit: int, intf: Optional[NetworkInterface], addr_mask: int,
+                    rtm_type: int, flags: int) -> Optional[NetworkInterface]:
         addr_type_idx = 1
         addr = None
-        addr_family = None
+        addr_family: int = socket.AF_UNSPEC
         while offset < limit:
-            while (not (addr_type_idx & addr_mask) and
-                    (addr_type_idx <= addr_mask)):
+            while not (addr_type_idx & addr_mask) and (addr_type_idx <= addr_mask):
                 addr_type_idx = addr_type_idx << 1
 
             sa_len, sa_fam = struct.unpack_from('@BB', buf, offset)
-            if (sa_fam in [socket.AF_INET, socket.AF_INET6] and
-                    addr_type_idx == RTA_IFA):
+            if sa_fam in [socket.AF_INET, socket.AF_INET6] and addr_type_idx == RTA_IFA:
                 addr_family = sa_fam
                 addr_offset = 4 if sa_fam == socket.AF_INET else 8
                 addr_length = 16 if sa_fam == socket.AF_INET6 else 4
@@ -1360,10 +1671,9 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                 if idx > 0:
                     off_name = offset + 8
                     if_name = (buf[off_name:off_name + name_len]).decode()
-                    intf = self.add_interface(if_name, idx, idx)
+                    intf = self.add_interface(NetworkInterface(if_name, idx, idx))
 
-            offset += (((sa_len + SA_ALIGNTO - 1) // SA_ALIGNTO) * SA_ALIGNTO
-                       if sa_len > 0 else SA_ALIGNTO)
+            offset += align_to(sa_len, SA_ALIGNTO) if sa_len > 0 else SA_ALIGNTO
             addr_type_idx = addr_type_idx << 1
 
         if rtm_type == self.RTM_IFINFO and intf is not None:
@@ -1375,30 +1685,30 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         if intf is None or intf.name in self.intf_blacklist or addr is None:
             return intf
 
+        address = NetworkAddress(addr_family, addr, intf)
         if rtm_type == self.RTM_DELADDR:
-            self.handle_deleted_address(addr, addr_family, intf)
+            self.handle_deleted_address(address)
         else:
             # Too bad, the address may be unuseable (tentative, e.g.) here
             # but we won't get any further notifcation about the address being
             # available for use. Thus, we try and may fail here
-            self.handle_new_address(addr, addr_family, intf)
+            self.handle_new_address(address)
 
         return intf
 
-    def cleanup(self):
-        self.selector.unregister(self.socket)
+    def cleanup(self) -> None:
+        self.aio_loop.remove_reader(self.socket.fileno())
         self.socket.close()
         super().cleanup()
 
 
-def sigterm_handler(signum, frame):
-    if signum == signal.SIGTERM:
-        logger.info('received SIGTERM, tearing down')
-        # implictely raise SystemExit to cleanup properly
-        sys.exit(0)
+def sigterm_handler() -> None:
+    logger.info('received termination/interrupt signal, tearing down')
+    # implictely raise SystemExit to cleanup properly
+    sys.exit(0)
 
 
-def parse_args():
+def parse_args() -> None:
     global args, logger
 
     parser = argparse.ArgumentParser()
@@ -1432,6 +1742,10 @@ def parse_args():
         '-w', '--workgroup',
         help='set workgroup name (default WORKGROUP)',
         default='WORKGROUP')
+    parser.add_argument(
+        '-A', '--no-autostart',
+        help='do not start networking after launch',
+        action='store_true')
     parser.add_argument(
         '-t', '--no-http',
         help='disable http service (for debugging, e.g.)',
@@ -1472,21 +1786,30 @@ def parse_args():
         '-o', '--no-host',
         help='disable server mode operation (host will be undiscoverable)',
         action='store_true')
+    parser.add_argument(
+        '-V', '--version',
+        help='show version number and exit',
+        action='store_true')
 
     args = parser.parse_args(sys.argv[1:])
+
+    if args.version:
+        print('wsdd - Web Service Discovery Daemon, v{}'.format(WSDD_VERSION))
+        sys.exit(0)
 
     if args.verbose == 1:
         log_level = logging.INFO
     elif args.verbose > 1:
         log_level = logging.DEBUG
+        asyncio.get_event_loop().set_debug(True)
+        logging.getLogger("asyncio").setLevel(logging.DEBUG)
     else:
         log_level = logging.WARNING
 
     if args.shortlog:
         fmt = '%(levelname)s: %(message)s'
     else:
-        fmt = ('%(asctime)s:%(name)s %(levelname)s(pid %(process)d): '
-               '%(message)s')
+        fmt = '%(asctime)s:%(name)s %(levelname)s(pid %(process)d): %(message)s'
 
     logging.basicConfig(level=log_level, format=fmt)
     logger = logging.getLogger('wsdd')
@@ -1505,46 +1828,7 @@ def parse_args():
         ElementTree.register_namespace(prefix, uri)
 
 
-def send_outstanding_messages(block=False):
-    """
-    Send all queued datagrams for which the timeout has been reached. If block
-    is true then all queued messages will be sent but with their according
-    delay.
-    """
-    if len(send_queue) == 0:
-        return None
-
-    # reverse ordering for faster removal of the last element
-    send_queue.sort(key=lambda x: x[0], reverse=True)
-
-    # Emit every message that is "too late". Note that in case the system
-    # time jumps forward, multiple outstanding message which have a
-    # delay between them are sent out without that delay.
-    now = time.time()
-    while len(send_queue) > 0 and (send_queue[-1][0] <= now or block):
-        mch = send_queue[-1][1]
-        addr = send_queue[-1][2]
-        msg = send_queue[-1][3]
-        try:
-            mch.send_socket.sendto(msg, addr)
-        except Exception as e:
-            logger.error('error while sending packet on {}: {}'.format(
-                mch.interface.name, e))
-
-        del send_queue[-1]
-        if block and len(send_queue) > 0:
-            delay = send_queue[-1][0] - now
-            if delay > 0:
-                time.sleep(delay)
-                now = time.time()
-
-    if len(send_queue) > 0 and not block:
-        return send_queue[-1][0] - now
-
-    return None
-
-
-def chroot(root):
+def chroot(root: str) -> bool:
     """
     Chroot into a separate directory to isolate ourself for increased security.
     """
@@ -1562,9 +1846,9 @@ def chroot(root):
     return True
 
 
-def get_ids_from_userspec(user_spec):
-    uid = None
-    gid = None
+def get_ids_from_userspec(user_spec: str) -> Tuple[int, int]:
+    uid: int
+    gid: int
     try:
         user, _, group = user_spec.partition(':')
 
@@ -1574,13 +1858,12 @@ def get_ids_from_userspec(user_spec):
         if group:
             gid = grp.getgrnam(group).gr_gid
     except Exception as e:
-        logger.error('could not get uid/gid for {}: {}'.format(user_spec, e))
-        return False
+        raise RuntimeError('could not get uid/gid for {}: {}'.format(user_spec, e))
 
     return (uid, gid)
 
 
-def drop_privileges(uid, gid):
+def drop_privileges(uid: int, gid: int) -> bool:
     try:
         if gid is not None:
             os.setgid(gid)
@@ -1600,30 +1883,30 @@ def drop_privileges(uid, gid):
     return True
 
 
-def main():
-    parse_args()
+def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> NetworkAddressMonitor:
+    if system == 'Linux':
+        return NetlinkAddressMonitor(aio_loop)
+    elif system == 'FreeBSD':
+        return RouteSocketAddressMonitor(aio_loop)
+    else:
+        raise NotImplementedError('unsupported OS')
 
-    if not args.discovery and args.listen:
-        logger.warning('Listen option ignored since discovery is disabled.')
-    elif args.discovery and not args.listen:
-        logger.warning('Discovery enabled but no listen option provided. '
-                       'Falling back to port {}'.format(WSDD_LISTEN_PORT))
-        args.listen = WSDD_LISTEN_PORT
+
+def main() -> int:
+    global logger, args
+
+    parse_args()
 
     if args.ipv4only and args.ipv6only:
         logger.error('Listening to no IP address family.')
         return 4
 
-    s = selectors.DefaultSelector()
-    if platform.system() == 'Linux':
-        nm = NetlinkAddressMonitor(s)
-    elif platform.system() == 'FreeBSD':
-        nm = RouteSocketAddressMonitor(s)
-    else:
-        raise NotImplementedError('unsupported OS')
+    aio_loop = asyncio.new_event_loop()
+    nm = create_address_monitor(platform.system(), aio_loop)
 
+    api_server = None
     if args.listen:
-        ApiServer(s, args.listen, nm.clients, nm.known_devices)
+        api_server = ApiServer(aio_loop, args.listen, nm)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:
@@ -1643,29 +1926,20 @@ def main():
         logger.warning('chrooted but running as root, consider -u option')
 
     # main loop, serve requests coming from any outbound socket
-    signal.signal(signal.SIGTERM, sigterm_handler)
+    aio_loop.add_signal_handler(signal.SIGINT, sigterm_handler)
+    aio_loop.add_signal_handler(signal.SIGTERM, sigterm_handler)
     try:
-        while True:
-            try:
-                timeout = send_outstanding_messages()
-                events = s.select(timeout)
-                for key, mask in events:
-                    if isinstance(key.data, MulticastHandler):
-                        key.data.handle_request(key)
-                    else:
-                        key.data.handle_request()
-            except (SystemExit, KeyboardInterrupt):
-                # silently exit the loop
-                logger.debug('got termination signal')
-                break
-            except Exception:
-                logger.exception('error in main loop')
-    finally:
+        aio_loop.run_forever()
+    except (SystemExit, KeyboardInterrupt):
         logger.info('shutting down gracefully...')
+        if api_server is not None:
+            aio_loop.run_until_complete(api_server.cleanup())
 
-    nm.cleanup()
+        nm.cleanup()
+        aio_loop.stop()
+    except Exception:
+        logger.exception('error in main loop')
 
-    send_outstanding_messages(True)
     logger.info('Done.')
     return 0
 

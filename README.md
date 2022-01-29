@@ -37,7 +37,7 @@ Samba at some time in the future.
 
 # Requirements
 
-wsdd requires Python 3 only. It runs on Linux and FreeBSD. Other Unixes, such
+wsdd requires Python 3.7 and later only. It runs on Linux and FreeBSD. Other Unixes, such
 as OpenBSD or NetBSD, might work as well but were not tested.
 
 Although Samba is not strictly required by wsdd itself, it makes sense to run
@@ -67,9 +67,10 @@ There are user-maintained packages for which you need to add the repository to
 `deb https://pkg.ltec.ch/public/ distro main`
 
 Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
-`lsb-release -cs` if unsure). After an `apt update` you can install wsdd with
-`apt install wsdd`. You may also add the public key to the trusted ones on your
-system.
+`lsb_release -cs` if unsure). After an `apt update` you can install wsdd with
+`apt install wsdd`.
+
+You also need to import the public key of the repository like this `apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key`.
 
 ### Gentoo
 
@@ -103,19 +104,24 @@ actual distribution/installation where they are to be used.
 
 ## Firewall Setup
 
-Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
-IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
-multicast address (`ff02::c`) is used.
+Traffic for the following ports, directions and addresses must be allowed.
 
-Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
-allowed.
+ * incoming and outgoing traffic to udp/3702 with multicast destination:
+   - `239.255.255.250` for IPv4
+   - `ff02::c` for IPv6
+ * outgoing unicast traffic from udp/3702
+ * incoming to tcp/5357
+
+You should further restrict the traffic to the (link-)local subnet, e.g. by
+using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
+must be enabled in order to get IPv4 multicast traffic working.
 
 ## Options
 
 By default wsdd runs in host mode and binds to all interfaces with only
 warnings and error messages enabled. In this configuration the host running
 wsdd is discovered with its configured hostname and belong to a default
-workgroup. The dicovery mode, which allows to search for other WSD-compatible
+workgroup. The discovery mode, which allows to search for other WSD-compatible
 devices must be enabled explicitely. Both modes can be used simultanously. See
 below for details.
 
@@ -126,6 +132,11 @@ below for details.
 
      Restrict to the given address family. If both options are specified no
      addreses will be available and wsdd will exit.
+
+ * `-A`, `--no-autostart`
+     Do not start networking activities automatically when the program is started.
+	 The API interface (see man page) can be used to start and stop the
+	 networking activities while the application is running.
 
  * `-c DIRECTORY`, `--chroot DIRECTORY`
 
@@ -150,6 +161,11 @@ below for details.
 
      This option also accepts IP addresses that the service should bind to.
      For IPv6, only link local addresses are actually considered as noted above.
+
+ * `-l PATH/PORT`, `--listen PATH/PORT`
+	 Enable the API server on the with a Unix domain socket on the given PATH
+	 or a local TCP socket bound to the given PORT. Refer to the man page for
+	 details on the API.
 
  * `-s`, `--shortlog`
 
@@ -179,6 +195,10 @@ below for details.
      Additively increase verbosity of the log output. A single occurrence of
      -v/--verbose sets the log level to INFO. More -v options set the log level
      to DEBUG.
+
+ * `-V`, `--version`
+
+     Show the version number and exit.
 
 ### Host Operation Mode
 
@@ -233,8 +253,6 @@ This mode allows to search for other WSD-compatible devices.
 	 option) can be used for a programatic interface. Refer to the man page for
 	 details of the API.
 
- * `-l PATH/PORT`, `--listen PATH/PORT`
-
 
 ## Example Usage
 
@@ -257,8 +275,8 @@ This mode allows to search for other WSD-compatible devices.
 (Read the source for more details)
 
 For each specified (or all) network interfaces, except for loopback, an UDP
-multicast socket for message reception, an UDP send socket for replying
-messages using unicast, and a listening TCP socket is created. This is done for
+multicast socket for message reception, two UDP sockets for replying using
+unicast as well as sending multicast traffic, and a listening TCP socket are created. This is done for
 both the IPv4 and the IPv6 address family if not configured otherwise by the
 command line arguments (see above). Upon startup a _Hello_ message is sent.
 When wsdd terminates due to a SIGTERM signal or keyboard interrupt, a graceful
@@ -320,7 +338,8 @@ Windows.
 # Contributing
 
 Contributions are welcome. Please ensure PEP8 compliance when submitting
-patches or pull requests.
+patches or pull requests. Opposite to PEP8, the maximum number of characters per
+line is increased to 120.
 
 # Licence
 

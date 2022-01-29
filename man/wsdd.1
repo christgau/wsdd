@@ -24,6 +24,11 @@ See below.
 Restrict to the given address family. If both options are specified no
 addreses will be available and wsdd will exit.
 .TP
+\fB\-A\fR, \fB\-\-no-autostart\fR
+Do not start networking activities automatically when the program is started.
+The API interface (see below) can be used to start and stop the networking
+activities while the application is running.
+.TP
 \fB\-c \fIDIRECTORY\fR, \fB\-\-chroot \fIDIRECTORY\fR
 chroot into the given \fIDIRECTORY\fR after initialization has been performed
 and right before the handling of incoming messages starts. The new root directory
@@ -70,6 +75,9 @@ you can use this option.
 Additively increase verbosity of the log output. A single occurrence of
 -v/--verbose sets the log level to INFO. More -v options set the log level
 to DEBUG.
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Show the version number and exit.
 .SS Host Mode Options
 .TP
 \fB\-d \fIDOMAIN\fR, \fB\-\-domain \fIDOMAIN\fR
@@ -134,28 +142,30 @@ domain socket to which a client can connect to.
     wsdd \-v \-w $SMB_GROUP -u daemon:daemon -c /var/run/wsdd/chroot
 .SH FIREWALL SETUP
 .PP
-Both incoming and outgoing multicast traffic on port 3702 must be allowed. For
-IPv4, the multicast address is `239.255.255.250`, for IPv6 the link local SSDP
-multicast address (`fe02::c`) is used.
+Traffic for the following ports, directions and addresses must be allowed:
+.TP
+- Incoming and outgoing traffic to udp/3702 with multicast destination: 239.255.255.250 for IPv4 and ff02::c for IPv6
+.TP
+- Outgoing unicast traffic from udp/3702
+.TP
+- Incoming traffic to tcp/5357
 .PP
-Incoming TCP traffic (and related outgoing traffic) on port 5357 must be
-allowed.
-.SH SERVER INTERFACE
-When the discovery mode is used, wsdd provides a text-based line-oriented
-server interface to query information and trigger actions. The interface can be
-used with TCP and UNIX domain sockets (see above). The TCP socket is bound to
-the local host only. The following commands can be issued:
-.SS probe - Search for devices
-\fBprobe \fI[INTERFACE]\fR
-
-Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
-WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
-A Probe messages initiates the discovery message flow. It may take some time for
-hosts to be actually discovered.
-.SS list - List discovered devices
-\fBlist\fR
-
-Returns a tab-separated list of discovered devices with the following information:
+You should further restrict the traffic to the (link-)local subnet, e.g. by
+using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
+must be enabled in order to get IPv4 multicast traffic working.
+.SH API INTERFACE
+Wsdd provides a text-based, line-oriented API interface to query information
+and trigger actions. The interface can be used with TCP and UNIX domain sockets
+(see \fB\-l/\-\-listen\fR option). The TCP socket is bound to the local host
+only. The following commands can be issued:
+.SS \fBclear\fR - Clear list of discovered devices
+Clears the list of all discovered devices. Use the \fBprobe\fR command to
+search for devices again. This command does not return any data and is only
+available in discover mode.
+.SS \fBlist\fR - List discovered devices
+Returns a tab-separated list of discovered devices with the following information.
+The possibly empty list of detected hosts is always terminated with a single
+dot ('.') in an otherwise empty line. This command is only available in discover mode.
 .TP
 UUID
 UUID of the discovered device. Note that a multi-homed device should appear
@@ -180,10 +190,24 @@ process delimited by commas.  Addresses are provided along with the interface
 (separated by '%') on which they were discovered.  IPv6 addresses are reported
 on square brackets. Note that the reported addresses may not match the actual
 device on which the device may be reached.
-.SS clear - Clear list of discovered devices \fBclear\fR
+.SS \fBprobe \fI[INTERFACE]\fR - Search for devices
+Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
+WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
+A Probe messages initiates the discovery message flow. It may take some time for
+hosts to be actually discovered. This command does not return any data and is
+only available in discovery mode.
+.SS \fBstart\fR - Start networking activities
+This command starts the networking acitivies of wsdd if they haven't been
+started yet. "Hello" messages are emitted and the host is announced on the
+network(s) when the host mode is active. If the discovery mode is enabled a
+probe process is also started.
 
-Clears the list of all discovered devices. Use the \fBprobe\fR command to search
-for devices again.
+.SS \fBstop\fR - Stop networking activities
+This is the reverse operation to start. When this command is received, "Bye"
+messages are sent in order to notify hosts in the network about the host's
+disappearance. All networking sockets used for the WSD protocol are closed as
+well. Activities can be restarted with the start operation.
+
 .SH SECURITY
 .PP
 wsdd does not implement any security feature, e.g. by using TLS for the http

@@ -4,6 +4,7 @@
 * Code conforms to PEP8. Use pep8 or pycodestyle with their default settings to check for compliance. Consider using a pre-commit hook to prevent non-conforming code from entering the repo.
 * Avoid inline comments, prefer (short) block comments.
 * Add documentation strings to function if required.
+* Use type hints.
 * If you want, add yourself to the AUTHORS file.
 
 # Commit Conventions

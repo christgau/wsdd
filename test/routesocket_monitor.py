@@ -60,20 +60,20 @@ def parse_route_socket_response(buf, keep_link):
         addr_type_idx = 1
         addr = None
         while sa_offset < offset + rtm_len:
-            while (not (addr_type_idx & addr_mask) and
-                    (addr_type_idx <= addr_mask)):
+            while (not (addr_type_idx & addr_mask)
+                   and (addr_type_idx <= addr_mask)):
                 addr_type_idx = addr_type_idx << 1
 
             sa_len, sa_fam = struct.unpack_from('@BB', buf, sa_offset)
-            if (sa_fam in [socket.AF_INET, socket.AF_INET6] and
-                    addr_type_idx == RTA_IFA):
+            if (sa_fam in [socket.AF_INET, socket.AF_INET6]
+               and addr_type_idx == RTA_IFA):
                 addr_offset = 4 if sa_fam == socket.AF_INET else 8
                 addr_length = 16 if sa_fam == socket.AF_INET6 else 4
                 addr = socket.inet_ntop(sa_fam, buf[(sa_offset + addr_offset):(
                     sa_offset + addr_offset + addr_length)])
             elif sa_fam == socket.AF_LINK:
                 if_idx, if_type, name_len = struct.unpack_from(
-                        '@HBB', buf, sa_offset + 2)
+                    '@HBB', buf, sa_offset + 2)
                 if if_idx > 0:
                     name_start = sa_offset + 8
                     name = (buf[name_start:name_start + name_len]).decode()
