@@ -61,16 +61,21 @@ can install wsdd like on Fedora where it is sufficient to issue
 
 ### Debian/Ubuntu
 
-There are user-maintained packages for which you need to add the repository to
-`/etc/apt/sources.list.d` with a file containing the following line
+User-maintained packages for Debian and Ubuntu are available, and may be added to a system through the following shell commands (replacing *`<distro>`* with the code name of the Debian or Ubuntu release, such as `buster` or `focal`):
 
-`deb https://pkg.ltec.ch/public/ distro main`
+- ```
+   echo deb https://pkg.ltec.ch/public/ <distro> main | sudo tee /etc/apt/sources.list.d/wsdd.list
+   ```
+- ```
+   sudo apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key
+   ```
+- ```
+   sudo apt update
+  ```
+- ```
+   sudo apt install wsdd
+   ```
 
-Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
-`lsb_release -cs` if unsure). After an `apt update` you can install wsdd with
-`apt install wsdd`.
-
-You also need to import the public key of the repository like this `apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key`.
 
 ### Gentoo
 
