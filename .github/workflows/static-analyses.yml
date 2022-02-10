@@ -1,4 +1,4 @@
-name: "Static Analyses: Syntax, Style, and Type Hinting Checks"
+name: "PEP8 and mypy"
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: ["master", "feat/workflows"]
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * */10'
 
 jobs:
   build:
