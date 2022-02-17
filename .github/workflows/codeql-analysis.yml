@@ -7,7 +7,7 @@ on:
     # The branches below must be a subset of the branches above
     branches: ["master", "feat/workflows"]
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * */10'
 
 jobs:
   analyze:
