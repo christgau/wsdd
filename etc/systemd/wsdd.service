@@ -1,6 +1,6 @@
 [Unit]
 Description=Web Services Dynamic Discovery host daemon
-Documentation=man:wsdd(1)
+Documentation=man:wsdd(8)
 ; Start after the network has been configured
 After=network-online.target
 Wants=network-online.target

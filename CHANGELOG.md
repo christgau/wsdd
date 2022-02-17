@@ -10,6 +10,7 @@
 ### Changed
 
 - Source code is spiced with type hints now.
+- man page moved to section 8.
 
 ## [0.7.0] - 2021-11-20
 
