@@ -5,6 +5,7 @@
 ### Added
 
 - GitHub workflow for static analyses added (syntax, format, and type checks are performed).
+- Added EnvironmentFile and according example for systemd-based distros.
 
 ### Changed
 

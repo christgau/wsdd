@@ -12,9 +12,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=/etc/default/wsdd
 ; The service is put into an empty runtime directory chroot,
 ; i.e. the runtime directory which usually resides under /run
-ExecStart=/usr/bin/wsdd --shortlog --chroot=/run/wsdd
+ExecStart=/usr/bin/wsdd --shortlog --chroot=/run/wsdd $WSDD_PARAMS
 DynamicUser=yes
 User=wsdd
 Group=wsdd

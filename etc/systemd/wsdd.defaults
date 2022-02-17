@@ -1,0 +1,5 @@
+# Additional arguments for wsdd can be provided here.
+# Use, e.g., "-i eth0" to restrict operations to a specific interface
+# Refer to the wsdd(1) man page for details
+
+WSDD_PARAMS=""
