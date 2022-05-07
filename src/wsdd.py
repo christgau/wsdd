@@ -1644,7 +1644,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                 # sizeof(if_msghdr) == 112, sizeof(ifa_msghdr) == 20 on Darwin
                 sa_offset = offset + (112 if rtm_type == self.RTM_IFINFO else 20)
             else:
-                raise NotImplementedError('unknown offest for OS: ' + self.system)
+                raise NotImplementedError('unknown offset for OS: ' + self.system)
 
             # For a route socket message, and different to a sysctl response,
             # the link info is stored inside the same rtm message, so it has to
