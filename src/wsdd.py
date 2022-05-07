@@ -1572,7 +1572,7 @@ SA_ALIGNTO: int = ctypes.sizeof(ctypes.c_long)
 
 class RouteSocketAddressMonitor(NetworkAddressMonitor):
     """
-    Implementation of the AddressMonitor for FreeBSD using route sockets
+    Implementation of the AddressMonitor for FreeBSD and Darwin using route sockets
     """
 
     # from sys/net/route.h
@@ -1583,8 +1583,9 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     socket: socket.socket
     intf_blacklist: List[str]
 
-    def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, system: str, aio_loop: asyncio.AbstractEventLoop) -> None:
         super().__init__(aio_loop)
+        self.system = system
         self.intf_blacklist = []
 
         # Create routing socket to get notified about future changes.
@@ -1637,7 +1638,13 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                 intf_flags = flags
 
             # those offset may unfortunately be architecture dependent
-            sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO else 20)
+            if self.system == 'FreeBSD':
+                sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO else 20)
+            elif self.system == 'Darwin':
+                # sizeof(if_msghdr) == 112, sizeof(ifa_msghdr) == 20 on Darwin
+                sa_offset = offset + (112 if rtm_type == self.RTM_IFINFO else 20)
+            else:
+                raise NotImplementedError('unknown offest for OS: ' + self.system)
 
             # For a route socket message, and different to a sysctl response,
             # the link info is stored inside the same rtm message, so it has to
@@ -1679,7 +1686,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         if rtm_type == self.RTM_IFINFO and intf is not None:
             if flags & IFF_LOOPBACK or not flags & IFF_MULTICAST:
                 self.intf_blacklist.append(intf.name)
-            elif intf in self.intf_blacklist:
+            elif intf.name in self.intf_blacklist:
                 self.intf_blacklist.remove(intf.name)
 
         if intf is None or intf.name in self.intf_blacklist or addr is None:
@@ -1886,10 +1893,10 @@ def drop_privileges(uid: int, gid: int) -> bool:
 def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> NetworkAddressMonitor:
     if system == 'Linux':
         return NetlinkAddressMonitor(aio_loop)
-    elif system == 'FreeBSD':
-        return RouteSocketAddressMonitor(aio_loop)
+    elif system == 'FreeBSD' or system == 'Darwin':
+        return RouteSocketAddressMonitor(system, aio_loop)
     else:
-        raise NotImplementedError('unsupported OS')
+        raise NotImplementedError('unsupported OS: ' + system)
 
 
 def main() -> int:
