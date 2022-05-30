@@ -1567,7 +1567,7 @@ IN6_IFF_TENTATIVE: int = 0x02
 IN6_IFF_DUPLICATED: int = 0x04
 IN6_IFF_NOTREADY: int = IN6_IFF_TENTATIVE | IN6_IFF_DUPLICATED
 
-SA_ALIGNTO: int = ctypes.sizeof(ctypes.c_long)
+SA_ALIGNTO: int = ctypes.sizeof(ctypes.c_long) if platform.system() != "Darwin" else ctypes.sizeof(ctypes.c_uint32)
 
 
 class RouteSocketAddressMonitor(NetworkAddressMonitor):
