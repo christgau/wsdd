@@ -1590,8 +1590,9 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     IF_DATA_DEFS: Dict[str, str] = {
         # if_data in if_msghdr is prepended with an u_short _ifm_spare1, thus the 'H' a the beginning)
         'FreeBSD': 'H6c2c8c8c104c8c16c',
-        # There are 21 uint32_t in the if_data struct (21 x 4 Bytes = (12 + 72) x 1 Bytes = 84 Bytes)
-        'Darwin': '8c12c72c'
+        # There are 8 bytes and 22 uint32_t in the if_data struct (22 x 4 Bytes + 8 = 96 Bytes)
+        # It is also aligned on 4-byte boundary necessitating 2 bytes padding inside if_msghdr
+        'Darwin': '2c8c22I'
     }
 
     socket: socket.socket
