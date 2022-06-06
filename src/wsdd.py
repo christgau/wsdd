@@ -1640,7 +1640,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         intf_flags = 0
         while offset < len(buf):
             # unpack route message response
-            rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(self.RTM_HDR_DEF, buf, offset)
+            rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(self.IF_COMMON_HDR_DEF, buf, offset)
 
             if rtm_type not in [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]:
                 offset += rtm_len
