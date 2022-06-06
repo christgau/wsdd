@@ -1575,24 +1575,38 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     Implementation of the AddressMonitor for FreeBSD and Darwin using route sockets
     """
 
-    # from sys/net/route.h
+    # Common definition for beginning part of if(m?a)?_msghdr structs (see net/if.h).
+    IF_COMMON_HDR_DEF: str = '@HBBii'
     RTM_NEWADDR: int = 0xC
     RTM_DELADDR: int = 0xD
     RTM_IFINFO: int = 0xE
 
+    # from net/if.h (struct ifa_msghdr)
+    IFA_MSGHDR_DEF: str = IF_COMMON_HDR_DEF + 'hi'
+    IFA_MSGHDR_SIZE: int = struct.calcsize(IFA_MSGHDR_DEF)
+
+    IF_MSGHDR_DEF_BASE: str = IF_COMMON_HDR_DEF + 'h'
+    # The struct package does not allow to specify those, thus we hard code them as chars (x4).
+    IF_DATA_DEFS: Dict[str, str] = {
+        # if_data in if_msghdr is prepended with an u_short _ifm_spare1, thus the 'H' a the beginning)
+        'FreeBSD': 'H6c2c8c8c104c8c16c',
+        # There are 21 uint32_t in the if_data struct (21 x 4 Bytes = (12 + 72) x 1 Bytes = 84 Bytes)
+        'Darwin': '8c12c72c'
+    }
+
     socket: socket.socket
     intf_blacklist: List[str]
 
-    def __init__(self, system: str, aio_loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
         super().__init__(aio_loop)
-        self.system = system
         self.intf_blacklist = []
 
         # Create routing socket to get notified about future changes.
-        # Do this before fetching the current routing information to avoid
-        # race condition.
+        # Do this before fetching the current routing information to avoid race condition.
         self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
+
+        self.IF_MSGHDR_SIZE = struct.calcsize(self.IF_MSGHDR_DEF_BASE + self.IF_DATA_DEFS[platform.system()])
 
     def do_enumerate(self) -> None:
         super().do_enumerate()
@@ -1625,26 +1639,17 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         intf = None
         intf_flags = 0
         while offset < len(buf):
-            rtm_len, _, rtm_type = struct.unpack_from('@HBB', buf, offset)
-            # addr_mask has same offset in if_msghdr and ifs_msghdr
-            addr_mask, flags = struct.unpack_from('ii', buf, offset + 4)
+            # unpack route message response
+            rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(self.RTM_HDR_DEF, buf, offset)
 
-            msg_types = [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]
-            if rtm_type not in msg_types:
+            if rtm_type not in [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]:
                 offset += rtm_len
                 continue
 
             if rtm_type == self.RTM_IFINFO:
                 intf_flags = flags
 
-            # those offset may unfortunately be architecture dependent
-            if self.system == 'FreeBSD':
-                sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO else 20)
-            elif self.system == 'Darwin':
-                # sizeof(if_msghdr) == 112, sizeof(ifa_msghdr) == 20 on Darwin
-                sa_offset = offset + (112 if rtm_type == self.RTM_IFINFO else 20)
-            else:
-                raise NotImplementedError('unknown offset for OS: ' + self.system)
+            sa_offset = offset + (self.IF_MSGHDR_SIZE if rtm_type == self.RTM_IFINFO else self.IFA_MSGHDR_SIZE)
 
             # For a route socket message, and different to a sysctl response,
             # the link info is stored inside the same rtm message, so it has to
@@ -1893,8 +1898,8 @@ def drop_privileges(uid: int, gid: int) -> bool:
 def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> NetworkAddressMonitor:
     if system == 'Linux':
         return NetlinkAddressMonitor(aio_loop)
-    elif system == 'FreeBSD' or system == 'Darwin':
-        return RouteSocketAddressMonitor(system, aio_loop)
+    elif system in ['FreeBSD', 'Darwin']:
+        return RouteSocketAddressMonitor(aio_loop)
     else:
         raise NotImplementedError('unsupported OS: ' + system)
 
