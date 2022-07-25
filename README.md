@@ -59,18 +59,34 @@ can install wsdd like on Fedora where it is sufficient to issue
 
 `dnf install wsdd`
 
-### Debian/Ubuntu
+### Debian/Ubuntu/Mint
 
-There are user-maintained packages for which you need to add the repository to
-```/etc/apt/sources.list.d``` with a file containing the following line
+There are user-maintained packages which you can install by following these steps:
 
-`deb https://pkg.ltec.ch/public/ distro main`
+1. import the security key for that repository
+```
+sudo apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key
+```
 
-Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
-`lsb_release -cs` if unsure). After an `apt update` you can install wsdd with
-`apt install wsdd`.
+2. find out your distro, which is the codename for your version of debian. Debian uses codenames for various versions such as `buster` or `bullseye`. If you are unsure what your distro is you can find out in debian by using
+```
+lsb_release -cs
+```
+In Ubuntu or Mint, if you are using an up to date version, you will just want to use the latest version.
+Go to https://www.debian.org/download to locate the latest codename for debian.
+You can double check that this codename appears here https://pkg.ltec.ch/public/dists/ and if it does not find the latest codename that does.
 
-You also need to import the public key of the repository like this `apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key`.
+3. add the repository to `/etc/apt/sources.list.d` with a file containing the following line `deb https://pkg.ltec.ch/public/ DISTRO main` replacing `DISTRO` with the codename of your Debian distro.
+
+4. refresh available packages via
+```
+apt update
+```
+
+5. install wsdd via
+```
+apt install wsdd
+```
 
 ### Gentoo
 
@@ -80,8 +96,14 @@ one of them you can install wsdd with
 
 ```
 emerge eselect-repository
+```
+```
 eselect repository enable guru
+```
+```
 emerge --sync
+```
+```
 emerge wsdd
 ```
 
