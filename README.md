@@ -62,7 +62,7 @@ can install wsdd like on Fedora where it is sufficient to issue
 ### Debian/Ubuntu
 
 There are user-maintained packages for which you need to add the repository to
-`/etc/apt/sources.list.d` with a file containing the following line
+```/etc/apt/sources.list.d``` with a file containing the following line
 
 `deb https://pkg.ltec.ch/public/ distro main`
 
