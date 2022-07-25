@@ -78,7 +78,11 @@ In Ubuntu or Mint, if you are using an up to date version, you will just want to
 Go to https://www.debian.org/download to locate the latest codename for debian.
 You can double check that this codename appears here https://pkg.ltec.ch/public/dists/ and if it does not find the latest codename that does.
 
+Debian 11.4 Bullseye is the latest version for Mint 20 and Ubuntu 22.
+
 3. add the repository to `/etc/apt/sources.list.d` with a file containing the following line `deb https://pkg.ltec.ch/public/ DISTRO main` replacing `DISTRO` with the codename of your Debian distro.
+
+in mint you can do this via GUI: `menu > administration > software sources > additional repositories > add`
 
 4. refresh available packages via
 ```
