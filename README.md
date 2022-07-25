@@ -88,6 +88,13 @@ apt update
 apt install wsdd
 ```
 
+6. optionally you can configure wsdd via changing `/etc/wsdd.conf`.
+
+7. run wsdd via
+```
+sudo systemctl start wsdd
+```
+
 ### Gentoo
 
 You can choose between two overlays: the GURU project and an [author-maintained
