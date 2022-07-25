@@ -57,7 +57,9 @@ Install wsdd from the [AUR package](https://aur.archlinux.org/wsdd.git).
 wsdd is included in RedHat/CentOS' EPEL repository. After setting that up, you
 can install wsdd like on Fedora where it is sufficient to issue
 
-`dnf install wsdd`
+```
+dnf install wsdd
+```
 
 ### Debian/Ubuntu/Mint
 
