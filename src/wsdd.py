@@ -1400,8 +1400,8 @@ RTMGRP_LINK: int = 1
 RTMGRP_IPV4_IFADDR: int = 0x10
 RTMGRP_IPV6_IFADDR: int = 0x100
 
-# from netlink.h
-NLM_HDR_LEN: int = 16
+# from netlink.h (struct nlmsghdr)
+NLM_HDR_DEF: str = '@IHHII'
 
 NLM_F_REQUEST: int = 0x01
 NLM_F_ROOT: int = 0x100
@@ -1417,7 +1417,8 @@ IFA_F_HOMEADDRESS: int = 0x10
 IFA_F_DEPRECATED: int = 0x20
 IFA_F_TENTATIVE: int = 0x40
 
-# from if_addr.h
+# from if_addr.h (struct ifaddrmsg)
+IFADDR_MSG_DEF: str = '@BBBBI'
 IFA_ADDRESS: int = 1
 IFA_LOCAL: int = 2
 IFA_LABEL: int = 3
@@ -1456,11 +1457,14 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
         self.socket.bind((0, rtm_groups))
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
+        self.NLM_HDR_LEN = struct.calcsize(NLM_HDR_DEF)
+
     def do_enumerate(self) -> None:
         super().do_enumerate()
 
         kernel = (0, 0)
-        req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, self.RTM_GETADDR,
+        # Append an unsigned byte to the header for the request.
+        req = struct.pack(NLM_HDR_DEF + 'B', self.NLM_HDR_LEN + 1, self.RTM_GETADDR,
                           NLM_F_REQUEST | NLM_F_DUMP, 1, 0, socket.AF_PACKET)
         self.socket.sendto(req, kernel)
 
@@ -1472,10 +1476,10 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         offset = 0
         while offset < len(buf):
-            h_len, h_type, _, _, _ = struct.unpack_from('@IHHII', buf, offset)
-            offset += NLM_HDR_LEN
+            h_len, h_type, _, _, _ = struct.unpack_from(NLM_HDR_DEF, buf, offset)
+            offset += self.NLM_HDR_LEN
 
-            msg_len = h_len - NLM_HDR_LEN
+            msg_len = h_len - self.NLM_HDR_LEN
             if msg_len < 0:
                 break
 
@@ -1484,8 +1488,8 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
-            # decode ifaddrmsg as in rtnetlink.h
-            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from('@BBBBI', buf, offset)
+            # decode ifaddrmsg as in if_addr.h
+            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(IFADDR_MSG_DEF, buf, offset)
             if ((ifa_flags & IFA_F_DADFAILED) or (ifa_flags & IFA_F_HOMEADDRESS)
                     or (ifa_flags & IFA_F_DEPRECATED) or (ifa_flags & IFA_F_TENTATIVE)):
                 logger.debug('ignore address with invalid state {}'.format(hex(ifa_flags)))

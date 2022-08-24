@@ -34,9 +34,9 @@ def parse_route_socket_response(buf, keep_link):
     link = None
     print(len(buf))
     while offset < len(buf):
-        rtm_len, _, rtm_type = struct.unpack_from('@HBB', buf, offset)
         # mask(addrs) has same offset in if_msghdr and ifs_msghdr
-        addr_mask, flags = struct.unpack_from('ii', buf, offset + 4)
+        rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(
+            '@HBBii', buf, offset)
 
         msg_type = ''
         if rtm_type not in [RTM_NEWADDR, RTM_DELADDR, RTM_IFINFO]:
@@ -44,6 +44,7 @@ def parse_route_socket_response(buf, keep_link):
             continue
 
         # those offset may unfortunately be architecture dependent
+        # (152 is FreeBSD-specific)
         sa_offset = offset + ((16 + 152) if rtm_type == RTM_IFINFO else 20)
 
         if rtm_type in [RTM_NEWADDR, RTM_IFINFO]:
