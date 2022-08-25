@@ -46,7 +46,10 @@ init script depends on the Samba service.
 
 # Installation
 
-## Operating System and Distribution-Dependant Instructions
+## Operating System and Distribution-Depending Instructions
+
+This section provides instructions how to install wsdd on different OS distributions.
+Sufficient privileges are assumed to be in effect, e.g. by being root or using sudo.
 
 ### Arch Linux
 
@@ -54,34 +57,80 @@ Install wsdd from the [AUR package](https://aur.archlinux.org/wsdd.git).
 
 ### CentOS, Fedora, RHEL
 
-wsdd is included in RedHat/CentOS' EPEL repository. After setting that up, you
+wsdd is included in RedHat/CentOS' EPEL repository. After [setting that up](https://docs.fedoraproject.org/en-US/epel/), you
 can install wsdd like on Fedora where it is sufficient to issue
 
-`dnf install wsdd`
+```
+dnf install wsdd
+```
 
-### Debian/Ubuntu
+### Debian-based Distributions
 
-There are user-maintained packages for which you need to add the repository to
-`/etc/apt/sources.list.d` with a file containing the following line
+#### Debian
 
-`deb https://pkg.ltec.ch/public/ distro main`
+There is currently no package for wsdd in the official Debian repositories.
+However, wsdd is considered to be part of the next Debian release, *Bookworm*, which in the testing phase.
+A wsdd package is also available in *unstable*.
 
-Replace `distro` with the name of your distro, e.g. `buster` or `xenial` (issue
-`lsb_release -cs` if unsure). After an `apt update` you can install wsdd with
-`apt install wsdd`.
+To install wsdd under Bullseye and earlier see the "Others" section below.
 
-You also need to import the public key of the repository like this `apt-key adv --fetch-keys https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key`.
+#### Ubuntu/Mint
+
+Starting from Ubuntu 22.04 LTS (*Jammy Jellyfish*), wsdd has landed in the official *universe* package repository.
+Thus, it is sufficient to install it via
+
+```
+apt install wsdd
+```
+
+This also applies to Linux Mint, starting from version 21 (Vanessa).
+For older Ubuntu LTS or Linux Mint releases, see the "Others" section below.
+
+#### Others
+
+There are user-maintained packages for which you need to add the repository to the apt repo list and download the according GPG public key:
+
+```
+wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmour > /usr/share/keyrings/wsdd.gpg
+echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/wsdd.list
+
+```
+
+Note that the repository only provides packages for Debian and Ubuntu LTS releases up to *Buster* and *Focal Fossa* (20.04), respectively.
+Thus, make sure that `lsb_release -sc` returns a compatible Debian or Ubuntu release name.
+On Linux Mint, the command may not return such a name and the produced list file needs to be adjusted accordingly.
+
+After the GPG public key file and repository have been created, install wsdd via:
+
+```
+apt update
+apt install wsdd
+```
+
+### FreeBSD
+
+The wsdd port can be installed via
+
+```
+pkg install py39-wsdd
+```
 
 ### Gentoo
 
 You can choose between two overlays: the GURU project and an [author-maintained
-dedicated overlay](https://github.com/christgau/wsdd-gentoo).  After setting up
-one of them you can install wsdd with
+dedicated overlay](https://github.com/christgau/wsdd-gentoo) which can be selected as follows
+
 
 ```
 emerge eselect-repository
 eselect repository enable guru
 emerge --sync
+```
+
+After setting up one of them you can install wsdd with
+
+
+```
 emerge wsdd
 ```
 
@@ -91,8 +140,8 @@ No installation steps are required. Just place the wsdd.py file anywhere you
 want to, rename it to wsdd, and run it from there. The init scripts/unit files
 assume that wsdd is installed under `/usr/bin/wsdd` or `/usr/local/bin/wsdd` in
 case of FreeBSD. There are no configuration files. No special privileges are
-required to run wsdd, so it is advisable to run the service as an unprivileged
-user such as _nobody_.
+required to run wsdd, so it is advisable to run the service as an unprivileged,
+possibly dedicated, user for the service.
 
 The `etc` directory of the repo contains sample configuration files for
 different init(1) systems, namely FreeBSD's rc.d, Gentoo's openrc, and systemd
@@ -122,7 +171,7 @@ By default wsdd runs in host mode and binds to all interfaces with only
 warnings and error messages enabled. In this configuration the host running
 wsdd is discovered with its configured hostname and belong to a default
 workgroup. The discovery mode, which allows to search for other WSD-compatible
-devices must be enabled explicitely. Both modes can be used simultanously. See
+devices must be enabled explicitly. Both modes can be used simultaneously. See
 below for details.
 
 ### General options
