@@ -1400,8 +1400,8 @@ RTMGRP_LINK: int = 1
 RTMGRP_IPV4_IFADDR: int = 0x10
 RTMGRP_IPV6_IFADDR: int = 0x100
 
-# from netlink.h
-NLM_HDR_LEN: int = 16
+# from netlink.h (struct nlmsghdr)
+NLM_HDR_DEF: str = '@IHHII'
 
 NLM_F_REQUEST: int = 0x01
 NLM_F_ROOT: int = 0x100
@@ -1417,7 +1417,8 @@ IFA_F_HOMEADDRESS: int = 0x10
 IFA_F_DEPRECATED: int = 0x20
 IFA_F_TENTATIVE: int = 0x40
 
-# from if_addr.h
+# from if_addr.h (struct ifaddrmsg)
+IFADDR_MSG_DEF: str = '@BBBBI'
 IFA_ADDRESS: int = 1
 IFA_LOCAL: int = 2
 IFA_LABEL: int = 3
@@ -1456,11 +1457,14 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
         self.socket.bind((0, rtm_groups))
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
+        self.NLM_HDR_LEN = struct.calcsize(NLM_HDR_DEF)
+
     def do_enumerate(self) -> None:
         super().do_enumerate()
 
         kernel = (0, 0)
-        req = struct.pack('@IHHIIB', NLM_HDR_LEN + 1, self.RTM_GETADDR,
+        # Append an unsigned byte to the header for the request.
+        req = struct.pack(NLM_HDR_DEF + 'B', self.NLM_HDR_LEN + 1, self.RTM_GETADDR,
                           NLM_F_REQUEST | NLM_F_DUMP, 1, 0, socket.AF_PACKET)
         self.socket.sendto(req, kernel)
 
@@ -1472,10 +1476,10 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         offset = 0
         while offset < len(buf):
-            h_len, h_type, _, _, _ = struct.unpack_from('@IHHII', buf, offset)
-            offset += NLM_HDR_LEN
+            h_len, h_type, _, _, _ = struct.unpack_from(NLM_HDR_DEF, buf, offset)
+            offset += self.NLM_HDR_LEN
 
-            msg_len = h_len - NLM_HDR_LEN
+            msg_len = h_len - self.NLM_HDR_LEN
             if msg_len < 0:
                 break
 
@@ -1484,8 +1488,8 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
                 offset += align_to(msg_len, NLM_HDR_ALIGNTO)
                 continue
 
-            # decode ifaddrmsg as in rtnetlink.h
-            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from('@BBBBI', buf, offset)
+            # decode ifaddrmsg as in if_addr.h
+            ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(IFADDR_MSG_DEF, buf, offset)
             if ((ifa_flags & IFA_F_DADFAILED) or (ifa_flags & IFA_F_HOMEADDRESS)
                     or (ifa_flags & IFA_F_DEPRECATED) or (ifa_flags & IFA_F_TENTATIVE)):
                 logger.debug('ignore address with invalid state {}'.format(hex(ifa_flags)))
@@ -1567,18 +1571,33 @@ IN6_IFF_TENTATIVE: int = 0x02
 IN6_IFF_DUPLICATED: int = 0x04
 IN6_IFF_NOTREADY: int = IN6_IFF_TENTATIVE | IN6_IFF_DUPLICATED
 
-SA_ALIGNTO: int = ctypes.sizeof(ctypes.c_long)
+SA_ALIGNTO: int = ctypes.sizeof(ctypes.c_long) if platform.system() != "Darwin" else ctypes.sizeof(ctypes.c_uint32)
 
 
 class RouteSocketAddressMonitor(NetworkAddressMonitor):
     """
-    Implementation of the AddressMonitor for FreeBSD using route sockets
+    Implementation of the AddressMonitor for FreeBSD and Darwin using route sockets
     """
 
-    # from sys/net/route.h
+    # Common definition for beginning part of if(m?a)?_msghdr structs (see net/if.h).
+    IF_COMMON_HDR_DEF: str = '@HBBii'
     RTM_NEWADDR: int = 0xC
     RTM_DELADDR: int = 0xD
     RTM_IFINFO: int = 0xE
+
+    # from net/if.h (struct ifa_msghdr)
+    IFA_MSGHDR_DEF: str = IF_COMMON_HDR_DEF + 'hi'
+    IFA_MSGHDR_SIZE: int = struct.calcsize(IFA_MSGHDR_DEF)
+
+    IF_MSGHDR_DEF_BASE: str = IF_COMMON_HDR_DEF + 'h'
+    # The struct package does not allow to specify those, thus we hard code them as chars (x4).
+    IF_DATA_DEFS: Dict[str, str] = {
+        # if_data in if_msghdr is prepended with an u_short _ifm_spare1, thus the 'H' a the beginning)
+        'FreeBSD': 'H6c2c8c8c104c8c16c',
+        # There are 8 bytes and 22 uint32_t in the if_data struct (22 x 4 Bytes + 8 = 96 Bytes)
+        # It is also aligned on 4-byte boundary necessitating 2 bytes padding inside if_msghdr
+        'Darwin': '2c8c22I'
+    }
 
     socket: socket.socket
     intf_blacklist: List[str]
@@ -1588,10 +1607,11 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         self.intf_blacklist = []
 
         # Create routing socket to get notified about future changes.
-        # Do this before fetching the current routing information to avoid
-        # race condition.
+        # Do this before fetching the current routing information to avoid race condition.
         self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
+
+        self.IF_MSGHDR_SIZE = struct.calcsize(self.IF_MSGHDR_DEF_BASE + self.IF_DATA_DEFS[platform.system()])
 
     def do_enumerate(self) -> None:
         super().do_enumerate()
@@ -1624,20 +1644,17 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         intf = None
         intf_flags = 0
         while offset < len(buf):
-            rtm_len, _, rtm_type = struct.unpack_from('@HBB', buf, offset)
-            # addr_mask has same offset in if_msghdr and ifs_msghdr
-            addr_mask, flags = struct.unpack_from('ii', buf, offset + 4)
+            # unpack route message response
+            rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(self.IF_COMMON_HDR_DEF, buf, offset)
 
-            msg_types = [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]
-            if rtm_type not in msg_types:
+            if rtm_type not in [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]:
                 offset += rtm_len
                 continue
 
             if rtm_type == self.RTM_IFINFO:
                 intf_flags = flags
 
-            # those offset may unfortunately be architecture dependent
-            sa_offset = offset + ((16 + 152) if rtm_type == self.RTM_IFINFO else 20)
+            sa_offset = offset + (self.IF_MSGHDR_SIZE if rtm_type == self.RTM_IFINFO else self.IFA_MSGHDR_SIZE)
 
             # For a route socket message, and different to a sysctl response,
             # the link info is stored inside the same rtm message, so it has to
@@ -1679,7 +1696,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         if rtm_type == self.RTM_IFINFO and intf is not None:
             if flags & IFF_LOOPBACK or not flags & IFF_MULTICAST:
                 self.intf_blacklist.append(intf.name)
-            elif intf in self.intf_blacklist:
+            elif intf.name in self.intf_blacklist:
                 self.intf_blacklist.remove(intf.name)
 
         if intf is None or intf.name in self.intf_blacklist or addr is None:
@@ -1886,10 +1903,10 @@ def drop_privileges(uid: int, gid: int) -> bool:
 def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> NetworkAddressMonitor:
     if system == 'Linux':
         return NetlinkAddressMonitor(aio_loop)
-    elif system == 'FreeBSD':
+    elif system in ['FreeBSD', 'Darwin']:
         return RouteSocketAddressMonitor(aio_loop)
     else:
-        raise NotImplementedError('unsupported OS')
+        raise NotImplementedError('unsupported OS: ' + system)
 
 
 def main() -> int:
