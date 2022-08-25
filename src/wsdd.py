@@ -1667,6 +1667,15 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
 
             offset += rtm_len
 
+    def clear_addr_scope(self, raw_addr: bytes) -> bytes:
+        addr: bytearray = bytearray(raw_addr)
+        # adapted from in6_clearscope BSD/Mac kernel method (see scope6.c)
+        if addr[0] == 0xfe and (addr[1] & 0xc0) == 0x80:
+            addr[2] = 0
+            addr[3] = 0
+
+        return bytes(addr)
+
     def parse_addrs(self, buf: bytes, offset: int, limit: int, intf: Optional[NetworkInterface], addr_mask: int,
                     rtm_type: int, flags: int) -> Optional[NetworkInterface]:
         addr_type_idx = 1
@@ -1680,9 +1689,11 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
             if sa_fam in [socket.AF_INET, socket.AF_INET6] and addr_type_idx == RTA_IFA:
                 addr_family = sa_fam
                 addr_offset = 4 if sa_fam == socket.AF_INET else 8
-                addr_length = 16 if sa_fam == socket.AF_INET6 else 4
+                addr_length = 4 if sa_fam == socket.AF_INET else 16
                 addr_start = offset + addr_offset
                 addr = buf[addr_start:addr_start + addr_length]
+                if sa_fam == socket.AF_INET6:
+                    addr = self.clear_addr_scope(addr)
             elif sa_fam == socket.AF_LINK:
                 idx, _, name_len = struct.unpack_from('@HBB', buf, offset + 2)
                 if idx > 0:
