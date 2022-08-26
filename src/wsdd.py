@@ -770,7 +770,7 @@ class WSDClient(WSDUDPMessageHandler):
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
         device_uuid = str(uuid.UUID(endpoint))
         if device_uuid in WSDDiscoveredDevice.instances:
-            del(WSDDiscoveredDevice.instances[device_uuid])
+            del WSDDiscoveredDevice.instances[device_uuid]
 
         return None
 
