@@ -92,13 +92,13 @@ There are user-maintained packages for which you need to add the repository to t
 
 ```
 wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmour > /usr/share/keyrings/wsdd.gpg
-echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/wsdd.list
+source /etc/os-release
+echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ ${UBUNTU_CODENAME:-${VERSION_CODENAME:-UNKNOWN}} main" > /etc/apt/sources.list.d/wsdd.list
 
 ```
 
 Note that the repository only provides packages for Debian and Ubuntu LTS releases up to *Buster* and *Focal Fossa* (20.04), respectively.
-Thus, make sure that `lsb_release -sc` returns a compatible Debian or Ubuntu release name.
-On Linux Mint, the command may not return such a name and the produced list file needs to be adjusted accordingly.
+The `wsdd.list` file created by the command above should be checked to refer to an appropriate distro code name.
 
 After the GPG public key file and repository have been created, install wsdd via:
 
