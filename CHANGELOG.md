@@ -8,6 +8,10 @@
 - Added EnvironmentFile and according example for systemd-based distros.
 - Make wsdd work (again) on MacOS (#139). Thanks to Eugene Gershnik.
 
+### Fixed
+
+- Use of implicitly present async I/O loop instead created one for API servers. Fixes regression due to changed API in Python 3.10 (see #162)
+
 ### Changed
 
 - Source code is spiced with type hints now.
