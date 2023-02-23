@@ -7,6 +7,7 @@
 - GitHub workflow for static analyses added (syntax, format, and type checks are performed).
 - Added EnvironmentFile and according example for systemd-based distros.
 - Make wsdd work (again) on MacOS (#139). Thanks to Eugene Gershnik.
+- Application profile for UFW has been added (#169)
 
 ### Fixed
 

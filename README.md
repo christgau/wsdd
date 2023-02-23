@@ -165,6 +165,11 @@ You should further restrict the traffic to the (link-)local subnet, e.g. by
 using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
 must be enabled in order to get IPv4 multicast traffic working.
 
+For UFW, an application profile can be found under `etc/ufw/applications.d`.
+Note that UFW profile only allow to grant the traffic on specific UDP and TCP
+ports, but a restriction on the IP range (like link local for IPv6) or the
+multicast traffic is not possible.
+
 ## Options
 
 By default wsdd runs in host mode and binds to all interfaces with only

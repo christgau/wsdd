@@ -1,0 +1,4 @@
+[Wsdd]
+title=Wsdd
+description=Web Service Discovery host daemon implementation
+ports=3702/udp|5357/tcp
