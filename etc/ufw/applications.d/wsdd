@@ -1,0 +1,4 @@
+[wsdd]
+title=wsdd
+description=Web Service Discovery host daemon implementation that enable (Samba) hosts to be found by WSD client like Windows.
+ports=3702/udp|5357/tcp
