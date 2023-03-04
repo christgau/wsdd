@@ -57,7 +57,7 @@ class NetworkInterface:
     _index: int
     _scope: int
 
-    def __init__(self, name: str, scope: int, index: int = None) -> None:
+    def __init__(self, name: str, scope: int, index: int) -> None:
         self._name = name
         self._scope = scope
         if index is not None:
@@ -414,7 +414,7 @@ class WSDMessageHandler(INetworkPacketHandler):
         pass
 
     # shortcuts for building WSD responses
-    def add_endpoint_reference(self, parent: ElementTree.Element, endpoint: str = None) -> None:
+    def add_endpoint_reference(self, parent: ElementTree.Element, endpoint: Optional[str] = None) -> None:
         epr = ElementTree.SubElement(parent, 'wsa:EndpointReference')
         address = ElementTree.SubElement(epr, 'wsa:Address')
         if endpoint is None:
@@ -735,7 +735,7 @@ class WSDClient(WSDUDPMessageHandler):
         super().teardown()
         self.remove_outdated_probes()
 
-    def handle_packet(self, msg: str, src: UdpAddress = None) -> None:
+    def handle_packet(self, msg: str, src: Optional[UdpAddress] = None) -> None:
         self.handle_message(msg, src)
 
     def handle_hello(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
