@@ -44,7 +44,7 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
 
-WSDD_VERSION: str = '0.7.0'
+WSDD_VERSION: str = '0.7.1'
 
 
 args: argparse.Namespace

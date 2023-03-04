@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.7.1] - 2023-03-04
+
 ### Added
 
 - GitHub workflow for static analyses added (syntax, format, and type checks are performed).
