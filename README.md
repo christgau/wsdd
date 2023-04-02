@@ -90,15 +90,39 @@ For older Ubuntu LTS or Linux Mint releases, see the "Others" section below.
 
 There are user-maintained packages for which you need to add the repository to the apt repo list and download the according GPG public key:
 
+GPG public key file url = https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key
+
 ```
-wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmour > /usr/share/keyrings/wsdd.gpg
+curl -o /path/to/desired/output/file.ext https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key
+```
+
+This keyfile is "armored" meaning that the GPG public key binary data has been converted to ASCII text to prevent mangling. It must be converted back to binary data for use in your package manager.
+
+```
+gpg -o /path/to/desired/output/filename.gpg --dearmor /path/to/input/gpg/keyfile.gpg
+```
+
+Once the public key is converted into binary format, it should be placed in the correct location.
+Debian is moving to a new method for the purpose of explicitly linking each public key to it's proper repo. This addresses a security concern where any trusted public key in your system could be used to update any repo in your system.
+
+De-armored public keyfiles should be placed in /usr/share/keyrings/wsdd.gpg <br>
+The wsdd repo file should be created in /etc/apt/sources.list.d/wsdd.list <br>
+and should explicitly reference the keyfile
+```
+deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ xxxx main
+```
+Make sure to replace "xxxx" with the correct name for your system. (often this is a codename such as "bullseye", or a class such as "stable".)
+
+Some of these steps can be automated similar to below...
+```
+wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmor > /usr/share/keyrings/wsdd.gpg
 source /etc/os-release
 echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ ${UBUNTU_CODENAME:-${VERSION_CODENAME:-UNKNOWN}} main" > /etc/apt/sources.list.d/wsdd.list
 
 ```
-
-Note that the repository only provides packages for Debian and Ubuntu LTS releases up to *Buster* and *Focal Fossa* (20.04), respectively.
 The `wsdd.list` file created by the command above should be checked to refer to an appropriate distro code name.
+
+Note that the repository only provides packages for Debian and Ubuntu LTS releases up to *Buster* and *Bionic* (20.04), respectively. Debian bullseye, the next LTS release in the pipeline, is also available in this repo.
 
 After the GPG public key file and repository have been created, install wsdd via:
 
