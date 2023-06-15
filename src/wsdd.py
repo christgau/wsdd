@@ -738,6 +738,17 @@ class WSDClient(WSDUDPMessageHandler):
     def handle_packet(self, msg: str, src: Optional[UdpAddress] = None) -> None:
         self.handle_message(msg, src)
 
+    def __extract_xaddr(self, xaddrs: str) -> Optional[str]:
+        for addr in xaddrs.strip().split():
+            if (self.mch.address.family == socket.AF_INET6) and ('//[fe80::' in addr):
+                # use first link-local address for IPv6
+                return addr
+            elif self.mch.address.family == socket.AF_INET:
+                # use first (and very likely the only) IPv4 address
+                return addr
+
+        return None
+
     def handle_hello(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         pm_path = 'wsd:Hello'
         endpoint, xaddrs = self.extract_endpoint_metadata(body, pm_path)
@@ -747,17 +758,7 @@ class WSDClient(WSDUDPMessageHandler):
             self.enqueue_datagram(msg, self.mch.multicast_address)
             return None
 
-        xaddr = None
-        for addr in xaddrs.strip().split():
-            if (self.mch.address.family == socket.AF_INET6) and ('//[fe80::' in addr):
-                # use first link-local address for IPv6
-                xaddr = addr
-                break
-            elif self.mch.address.family == socket.AF_INET:
-                # use first (and very likely the only) IPv4 address
-                xaddr = addr
-                break
-
+        xaddr = self.__extract_xaddr(xaddrs)
         if xaddr is None:
             return None
 
@@ -790,7 +791,10 @@ class WSDClient(WSDUDPMessageHandler):
             self.enqueue_datagram(msg, self.mch.multicast_address)
             return None
 
-        xaddr = xaddrs.strip()
+        xaddr = self.__extract_xaddr(xaddrs)
+        if xaddr is None:
+            return None
+
         logger.debug('probe match for {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
 
@@ -809,7 +813,10 @@ class WSDClient(WSDUDPMessageHandler):
             logger.debug('resolve match without endpoint/xaddr')
             return None
 
-        xaddr = xaddrs.strip()
+        xaddr = self.__extract_xaddr(xaddrs)
+        if xaddr is None:
+            return None
+
         logger.debug('resolve match for {} on {}'.format(endpoint, xaddr))
         self.perform_metadata_exchange(endpoint, xaddr)
 
