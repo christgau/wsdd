@@ -68,11 +68,13 @@ dnf install wsdd
 
 #### Debian
 
-There is currently no package for wsdd in the official Debian repositories.
-However, wsdd is considered to be part of the next Debian release, *Bookworm*, which in the testing phase.
-A wsdd package is also available in *unstable*.
+As of Debian 12/Bookworm wsdd can be installed from the offical Debian repos via
 
-To install wsdd under Bullseye and earlier see the "Others" section below.
+```
+apt install wsdd
+```
+
+To install wsdd under 11/Bullseye and earlier see the "Others" section below.
 
 #### Ubuntu/Mint
 
