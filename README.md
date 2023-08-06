@@ -93,7 +93,7 @@ For older Ubuntu LTS or Linux Mint releases, see the "Others" section below.
 There are user-maintained packages for which you need to add the repository to the apt repo list and download the according GPG public key:
 
 ```
-wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmour > /usr/share/keyrings/wsdd.gpg
+wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmor > /usr/share/keyrings/wsdd.gpg
 source /etc/os-release
 echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ ${UBUNTU_CODENAME:-${VERSION_CODENAME:-UNKNOWN}} main" > /etc/apt/sources.list.d/wsdd.list
 
