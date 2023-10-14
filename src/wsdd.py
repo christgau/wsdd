@@ -93,9 +93,15 @@ class NetworkAddress:
 
     def __init__(self, family: int, raw: Union[bytes, str], interface: NetworkInterface) -> None:
         self._family = family
-        self._raw_address = raw if isinstance(raw, bytes) else socket.inet_pton(family, raw)
         self._interface = interface
-
+        if isinstance(raw, bytes):
+            self._raw_address = raw
+        else:
+            zone_id_idx = raw.rfind("%")
+            if zone_id_idx >= 0:
+                raw = raw[:iface_idx]
+            socket.inet_pton(family, raw)
+        
         self._address_str = socket.inet_ntop(self._family, self._raw_address)
 
     @property
