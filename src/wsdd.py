@@ -99,7 +99,7 @@ class NetworkAddress:
         else:
             zone_id_idx = raw.rfind("%")
             if zone_id_idx >= 0:
-                raw = raw[:iface_idx]
+                raw = raw[:zone_id_idx]
             self._raw_address = socket.inet_pton(family, raw)
         
         self._address_str = socket.inet_ntop(self._family, self._raw_address)
