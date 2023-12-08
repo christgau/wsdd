@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- The employed UUID is now read from `/etc/{machine-id,hostid}` before falling by back to the UUID derivation from the host name.
+
 ### Fixed
 
 - Handle addresses with zone id by ignoring the interface part (#184)

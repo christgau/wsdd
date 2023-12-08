@@ -1853,7 +1853,19 @@ def parse_args() -> None:
         logger.warning('no interface given, using all interfaces')
 
     if not args.uuid:
-        args.uuid = uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
+        def read_uuid_from_file(fn: str) -> Union[None, uuid.UUID]:
+            try:
+                with open(fn) as f:
+                    s: str = f.readline().strip()
+                    return uuid.UUID(s)
+            except Exception:
+                return None
+
+        # machine uuid: try machine-id file first but also check for hostid (FreeBSD)
+        args.uuid = read_uuid_from_file('/etc/machine-id') or \
+            read_uuid_from_file('/etc/hostid') or \
+            uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
+
         logger.info('using pre-defined UUID {0}'.format(str(args.uuid)))
     else:
         args.uuid = uuid.UUID(args.uuid)

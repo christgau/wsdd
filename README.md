@@ -240,11 +240,13 @@ below for details.
 
      The WSD specification requires a device to have a unique address that is
      stable across reboots or changes in networks. In the context of the
-     standard, it is assumed that this is something like a serial number. wsdd
-     uses the UUID version 5 with the DNS namespace and the host name of the
-     local machine as inputs. Thus, the host name should be stable and not be
-     modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID
-     you can use this option.
+     standard, it is assumed that this is something like a serial number. Wsdd
+     attempts to read the machine ID from `/etc/machine-id` and `/etc/hostid`
+     (in that order) before potentially chrooting in another environment. If
+     reading the machine ID fails, wsdd falls back to a version 5 UUID with the
+     DNS namespace and the host name of the local machine as inputs. Thus, the
+     host name should be stable and not be modified, e.g. by DHCP. However, if
+     you want wsdd to use a specific UUID you can use this option.
 
  * `-v`, `--verbose`
 
