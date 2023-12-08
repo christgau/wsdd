@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Handle addresses with zone id by ignoring the interface part (#184)
+
 ## [0.7.1] - 2023-03-04
 
 ### Added
