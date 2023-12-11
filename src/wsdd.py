@@ -617,12 +617,14 @@ class WSDDiscoveredDevice:
     props: Dict[str, str]
     display_name: str
     last_seen: float
+    types: Set[str]
 
     def __init__(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
         self.last_seen = 0.0
         self.addresses = {}
         self.props = {}
         self.display_name = ''
+        self.types = set()
 
         self.update(xml_str, xaddr, interface)
 
@@ -679,9 +681,8 @@ class WSDDiscoveredDevice:
             self.props[tag_name] = str(node.text)
 
     def extract_host_props(self, root: ElementTree.Element) -> None:
-        types = root.findtext('wsdp:Types', '', namespaces)
-        self.props['types'] = types.split(' ')[0]
-        if types != PUB_COMPUTER:
+        self.types = set(root.findtext('wsdp:Types', '', namespaces).split(' '))
+        if PUB_COMPUTER not in self.types:
             return
 
         comp = root.findtext(PUB_COMPUTER, '', namespaces)
@@ -1162,7 +1163,8 @@ class ApiServer:
             logger.debug('clearing list of known devices')
             WSDDiscoveredDevice.instances.clear()
         elif command == 'list' and args.discovery:
-            write_stream.write(bytes(self.get_list_reply(), 'utf-8'))
+            wsd_type = command_args[0] if command_args else None
+            write_stream.write(bytes(self.get_list_reply(wsd_type), 'utf-8'))
         elif command == 'quit':
             write_stream.close()
         elif command == 'start':
@@ -1175,9 +1177,12 @@ class ApiServer:
     def get_clients_by_interface(self, interface: Optional[str]) -> List[WSDClient]:
         return [c for c in WSDClient.instances if c.mch.address.interface.name == interface or not interface]
 
-    def get_list_reply(self) -> str:
+    def get_list_reply(self, wsd_type: Optional[str]) -> str:
         retval = ''
         for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
+            if wsd_type and (wsd_type not in dev.types):
+                continue
+
             addrs_str = []
             for addrs in dev.addresses.items():
                 addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))

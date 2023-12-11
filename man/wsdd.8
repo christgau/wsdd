@@ -164,10 +164,12 @@ only. The following commands can be issued:
 Clears the list of all discovered devices. Use the \fBprobe\fR command to
 search for devices again. This command does not return any data and is only
 available in discover mode.
-.SS \fBlist\fR - List discovered devices
-Returns a tab-separated list of discovered devices with the following information.
-The possibly empty list of detected hosts is always terminated with a single
-dot ('.') in an otherwise empty line. This command is only available in discover mode.
+.SS \fBlist \fI[TYPE]\fR - List discovered devices
+Returns a tab-separated list of discovered devices of the provided TYPE (e.g.
+"pub:Computer") with the following information. If no type is provided, all
+discovered devices are listed. The possibly empty list of detected hosts is
+always terminated with a single dot ('.') in an otherwise empty line. This
+command is only available in discover mode.
 .TP
 UUID
 UUID of the discovered device. Note that a multi-homed device should appear
