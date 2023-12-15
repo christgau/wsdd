@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Configuration files for firewalld (#186). Thanks to Ondrej Holy.
+
 ### Changed
 
 - The employed UUID is now read from `/etc/{machine-id,hostid}` before falling by back to the UUID derivation from the host name.
