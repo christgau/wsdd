@@ -1,0 +1,25 @@
+#!/bin/ksh
+
+workgroup=$(/usr/local/bin/testparm -s --parameter-name workgroup 2>/dev/null)
+samba_config_file="/etc/samba/smb.conf"
+
+if [ -z ${workgroup} ] && [ -r "${samba_config_file}" ]; then
+	workgroup=$(grep -i -E '^[[:space:]]*workgroup' "${samba_config_file}" | cut -f2 -d= | tr -d '[:blank:]')
+fi
+
+if [ -n "$workgroup" ]; then
+	daemon_flags="-w ${workgroup}"
+fi
+
+daemon="python3 /usr/local/bin/wsdd"
+
+# create user with
+# doas useradd -g =uid -c "WSD Daemon" -L daemon -s /sbin/nologin -d /var/empty -r 100..999 _wsdd
+daemon_user="_wsdd"
+
+. /etc/rc.d/rc.subr
+
+rc_bg="YES"
+rc_reload="NO"
+
+rc_cmd $1
