@@ -1579,7 +1579,7 @@ NET_RT_IFLIST: int = 3
 
 # from sys/net/if.h
 IFF_LOOPBACK: int = 0x8
-IFF_MULTICAST: int = 0x800
+IFF_MULTICAST: int = 0x800 if platform.system() != 'OpenBSD' else 0x8000
 
 # sys/netinet6/in6_var.h
 IN6_IFF_TENTATIVE: int = 0x02
