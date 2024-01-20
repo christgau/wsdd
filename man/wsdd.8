@@ -194,6 +194,9 @@ process delimited by commas.  Addresses are provided along with the interface
 (separated by '%') on which they were discovered.  IPv6 addresses are reported
 on square brackets. Note that the reported addresses may not match the actual
 device on which the device may be reached.
+.TP
+types
+Types of the detected device, delimited by commas.
 .SS \fBprobe \fI[INTERFACE]\fR - Search for devices
 Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
 WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.

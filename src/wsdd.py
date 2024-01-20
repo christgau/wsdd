@@ -1187,12 +1187,13 @@ class ApiServer:
             for addrs in dev.addresses.items():
                 addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))
 
-            retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
+            retval = retval + '{}\t{}\t{}\t{}\t{}\t{}\n'.format(
                 dev_uuid,
                 dev.display_name,
                 dev.props['BelongsTo'] if 'BelongsTo' in dev.props else '',
                 datetime.datetime.fromtimestamp(dev.last_seen).isoformat('T', 'seconds'),
-                ','.join(addrs_str))
+                ','.join(addrs_str),
+                ','.join(dev.types))
 
         retval += '.\n'
         return retval
