@@ -5,6 +5,7 @@
 ### Added
 
 - Configuration files for firewalld (#186). Thanks to Ondrej Holy.
+- Show device type and allow filtering in API's `list` command (#189). Thanks to Ondrej Holy.
 
 ### Changed
 
