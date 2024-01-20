@@ -464,7 +464,7 @@ class WSDMessageHandler(INetworkPacketHandler):
         msg_id = ElementTree.SubElement(header, 'wsa:MessageID')
         msg_id.text = uuid.uuid1().urn
 
-        if request_header:
+        if request_header is not None:
             req_msg_id = request_header.find('./wsa:MessageID', namespaces)
             if req_msg_id is not None:
                 relates_to = ElementTree.SubElement(header, 'wsa:RelatesTo')
