@@ -110,10 +110,10 @@ required to run wsdd, so it is advisable to run the service as an unprivileged,
 possibly dedicated, user for the service.
 
 The `etc` directory of the repo contains sample configuration files for
-different init(1) systems, namely FreeBSD's rc.d, Gentoo's openrc, and systemd
+different init(1) systems, e.g. FreeBSD's rc.d, Gentoo's openrc, and systemd
 which is used in most contemporary Linux distros. Those files may be used as
-templates for their actual usage. They are likely to require adjustments to the
-actual distribution/installation where they are to be used.
+templates. They are likely to require adjustments to the actual
+distribution/installation where they are to be used.
 
 # Usage
 
@@ -131,8 +131,8 @@ You should further restrict the traffic to the (link-)local subnet, e.g. by
 using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
 must be enabled in order to get IPv4 multicast traffic working.
 
-For UFW, an application profile can be found under `etc/ufw/applications.d`.
-Note that UFW profile only allow to grant the traffic on specific UDP and TCP
+For UFW and firewald, application/service profiles can be found in the respective directories.
+Note that UFW profiles only allow to grant the traffic on specific UDP and TCP
 ports, but a restriction on the IP range (like link local for IPv6) or the
 multicast traffic is not possible.
 
@@ -296,7 +296,7 @@ This mode allows to search for other WSD-compatible devices.
 
 (Read the source for more details)
 
-For each specified (or all) network interfaces, except for loopback, an UDP
+For each specified (or all) network interfaces, except for the loopback, an UDP
 multicast socket for message reception, two UDP sockets for replying using
 unicast as well as sending multicast traffic, and a listening TCP socket are created. This is done for
 both the IPv4 and the IPv6 address family if not configured otherwise by the
@@ -311,25 +311,18 @@ handle network traffic of the different sockets within a single process.
 
 wsdd does not implement any security feature, e.g. by using TLS for the http
 service. This is because wsdd's intended usage is within private, i.e. home,
-LANs. The _Hello_ message contains the hosts transport address, i.e. the IP
-address which speeds up discovery (avoids _Resolve_ message).
+LANs. The _Hello_ message contains the host's transport address, i.e. the IP
+address, which speeds up discovery (avoids _Resolve_ message).
 
 In order to increase the security, use the capabilities of the init system or
-consider the `-u` and `-c` options.
-
-## Using only IPv6 on FreeBSD
-
-If wsdd is running on FreeBSD using IPv6 only, the host running wsdd may not be
-reliably discovered. The reason appears to be that Windows is not always able
-to connect to the HTTP service for unknown reasons. As a workaround, run wsdd
-with IPv4 only.
+consider the `-u` and `-c` options to drop privileges and chroot.
 
 ## Usage with NATs
 
 Do not use wssd on interfaces that are affected by NAT. According to the
-standard, the _ResolveMatch_ messages emitted by wsdd, contain the IP address
+standard, the _ResolveMatch_ messages emitted by wsdd contain the IP address
 ("transport address" in standard parlance) of the interface(s) the application
-has been bound to into. When such messages are retrieved by a client (Windows
+has been bound to. When such messages are retrieved by a client (Windows
 hosts, e.g.) they are unlikely to be able to connect to the provided address
 which has been subject to NAT. To avoid this issue, use the `-i/--interface`
 option to bind wsdd to interfaces not affected by NAT.
@@ -396,15 +389,8 @@ patch set made cross-checking the WSD messages easier.
  * [Discussion at tenforums.com about missing hosts in network](https://www.tenforums.com/network-sharing/31221-windows-10-1511-network-browsing-issue.html)
    Note: Solutions suggest to go back to SMBv1 protocol which is deprecated! Do not follow this advice.
 
- * [Discussion in Synology Community Forum](https://forum.synology.com/enu/viewtopic.php?f=49&t=106924)
-
 ## Other stuff
 
- * Meanwhile, there is a [C implementation of a WSD daemon](https://github.com/Andy2244/wsdd2), named wsdd2.
+ * There is a [C implementation of a WSD daemon](https://github.com/Andy2244/wsdd2), named wsdd2.
    This one also includes LLMNR which wsdd lacks. However, LLMNR may not be required depending on the actual
    network/name resolution setup.
-
- * [OpenWRT includes](https://github.com/openwrt/packages/pull/5563) the above C implementation.
-   So OpenWRT users are unlikely to need an installation of wsdd.
-
- * [FreeNAS](https://redmine.ixsystems.com/issues/72099) appears to have wsdd included in the distribution.
