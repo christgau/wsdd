@@ -36,3 +36,4 @@ jobs:
         mypy --python-version=3.9 src/wsdd.py
         mypy --python-version=3.10 src/wsdd.py
         mypy --python-version=3.11 src/wsdd.py
+        mypy --python-version=3.12 src/wsdd.py
