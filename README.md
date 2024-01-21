@@ -64,48 +64,14 @@ can install wsdd like on Fedora where it is sufficient to issue
 dnf install wsdd
 ```
 
-### Debian-based Distributions
+### Debian-based Distributions (Debian, Ubuntu, Mint, ...)
 
-#### Debian
-
-As of Debian 12/Bookworm wsdd can be installed from the offical Debian repos via
-
-```
-apt install wsdd
-```
-
-To install wsdd under 11/Bullseye and earlier see the "Others" section below.
-
-#### Ubuntu/Mint
-
-Starting from Ubuntu 22.04 LTS (*Jammy Jellyfish*), wsdd has landed in the official *universe* package repository.
-Thus, it is sufficient to install it via
+Wsdd is included in the official package repositories of Debian and Ubuntu
+(*universe*) since versions 12 (*Bookworm*) and 22.04 LTS (*Jammy Jellyfish*),
+respectively.  This also applies to Linux Mint, starting from version 21
+(Vanessa).  Thus, it is sufficient to install it via
 
 ```
-apt install wsdd
-```
-
-This also applies to Linux Mint, starting from version 21 (Vanessa).
-For older Ubuntu LTS or Linux Mint releases, see the "Others" section below.
-
-#### Others
-
-There are user-maintained packages for which you need to add the repository to the apt repo list and download the according GPG public key:
-
-```
-wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmor > /usr/share/keyrings/wsdd.gpg
-source /etc/os-release
-echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ ${UBUNTU_CODENAME:-${VERSION_CODENAME:-UNKNOWN}} main" > /etc/apt/sources.list.d/wsdd.list
-
-```
-
-Note that the repository only provides packages for Debian and Ubuntu LTS releases up to *Buster* and *Focal Fossa* (20.04), respectively.
-The `wsdd.list` file created by the command above should be checked to refer to an appropriate distro code name.
-
-After the GPG public key file and repository have been created, install wsdd via:
-
-```
-apt update
 apt install wsdd
 ```
 
@@ -122,7 +88,6 @@ pkg install py39-wsdd
 You can choose between two overlays: the GURU project and an [author-maintained
 dedicated overlay](https://github.com/christgau/wsdd-gentoo) which can be selected as follows
 
-
 ```
 emerge eselect-repository
 eselect repository enable guru
@@ -130,7 +95,6 @@ emerge --sync
 ```
 
 After setting up one of them you can install wsdd with
-
 
 ```
 emerge wsdd
