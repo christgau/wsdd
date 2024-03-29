@@ -6,6 +6,7 @@
 
 - Configuration files for firewalld (#186). Thanks to Ondrej Holy.
 - Show device type and allow filtering in API's `list` command (#189). Thanks to Ondrej Holy.
+- Add option `--metadata-timeout` to set the timeout for the HTTP-based metadata exchange (closes #83)
 
 ### Changed
 

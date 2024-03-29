@@ -851,7 +851,7 @@ class WSDClient(WSDUDPMessageHandler):
             request.add_header('Host', host)
 
         try:
-            with urllib.request.urlopen(request, None, 2.0) as stream:
+            with urllib.request.urlopen(request, None, args.metadata_timeout) as stream:
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
             logger.warning('could not fetch metadata from: {} {}'.format(url, e))
@@ -1831,6 +1831,10 @@ def parse_args() -> None:
         '-V', '--version',
         help='show version number and exit',
         action='store_true')
+    parser.add_argument(
+        '--metadata-timeout',
+        help='set timeout for HTTP-based metadata exchange',
+        default=2.0)
 
     args = parser.parse_args(sys.argv[1:])
 

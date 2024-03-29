@@ -187,6 +187,9 @@ below for details.
 	 or a local TCP socket bound to the given PORT. Refer to the man page for
 	 details on the API.
 
+ * `--metadata-timeout TIMEOUT`
+     Set the timeout for HTTP-based metadate exchange. Default is 2.0 seconds.
+
  * `-s`, `--shortlog`
 
      Use a shorter logging format that only includes the level and message.
