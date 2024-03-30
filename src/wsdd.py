@@ -1598,7 +1598,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     """
 
     # Common definition for beginning part of if(m?a)?_msghdr structs (see net/if.h/man 4 route).
-    IF_COMMON_HDR_DEF = '@HBBii' if platform.system() != 'OpenBSD' else'@HBBHHHBBiii'
+    IF_COMMON_HDR_DEF = '@HBBii' if platform.system() != 'OpenBSD' else '@HBBHHHBBiii'
 
     # from net/if.h
     RTM_NEWADDR: int = 0xC
@@ -1676,14 +1676,14 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
             # unpack route message response
             if not self.is_openbsd:
                 rtm_len, rtm_version, rtm_type, addr_mask, flags = struct.unpack_from(
-                        self.IF_COMMON_HDR_DEF, buf, offset)
+                    self.IF_COMMON_HDR_DEF, buf, offset)
             else:
                 rtm_len, rtm_version, rtm_type, ifa_hdr_len, _, _, _, _, addr_mask, flags, _ = struct.unpack_from(
-                        self.IF_COMMON_HDR_DEF, buf, offset)
+                    self.IF_COMMON_HDR_DEF, buf, offset)
 
             # exit condition for OpenBSD where always the complete buffer (ie 4096 bytes) is returned
             if rtm_len == 0:
-                break;
+                break
 
             # skip over non-understood packets and versions
             if (rtm_type not in [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]) or (
