@@ -27,8 +27,7 @@ num_succeeded=0
 num_failed=0
 
 for test_case in "${test_files[@]}"; do
-		# change later to capture test output
-		log_target="/dev/null"
+		log_target="$(mktemp)"
 
 		echo -n "[${test_number}/${total_tests}] $(basename $(dirname "$test_case")) -> $(basename "${test_case}")... "
 
@@ -36,9 +35,12 @@ for test_case in "${test_files[@]}"; do
 				echo "OK"
 				num_succeeded=$((num_succeeded + 1))
 		else
+				cat "${log_target}"
 				echo "FAILED"
 				num_failed=$((num_failed + 1))
 		fi
+
+		rm -f "${log_target}"
 
 		test_number=$(($test_number + 1))
 done
