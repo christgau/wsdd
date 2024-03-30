@@ -1376,6 +1376,9 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
 
         self.http_servers.clear()
 
+        if not self.teardown_tasks:
+            return
+
         if not self.aio_loop.is_running():
             # Wait here for all pending tasks so that the main loop can be finished on termination.
             self.aio_loop.run_until_complete(asyncio.gather(*self.teardown_tasks))

@@ -15,6 +15,7 @@
 ### Fixed
 
 - Handle addresses with zone id by ignoring the interface part (#184)
+- Do not crash with asyncio future when non-existing interface is provided (#201)
 
 ## [0.7.1] - 2023-03-04
 
