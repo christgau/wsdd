@@ -37,7 +37,7 @@ Samba at some time in the future.
 
 # Requirements
 
-wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD and MacOS. 
+wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD and MacOS.
 Other Unixes, such as NetBSD, might work as well but were not tested.
 
 Although Samba is not strictly required by wsdd itself, it makes sense to run
@@ -188,7 +188,7 @@ below for details.
 	 details on the API.
 
  * `--metadata-timeout TIMEOUT`
-     Set the timeout for HTTP-based metadate exchange. Default is 2.0 seconds.
+     Set the timeout for HTTP-based metadata exchange. Default is 2.0 seconds.
 
  * `-s`, `--shortlog`
 

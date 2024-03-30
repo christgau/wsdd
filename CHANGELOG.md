@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.8] -- 2024-03-30
 
 ### Added
 
@@ -16,7 +16,7 @@
 ### Fixed
 
 - Handle addresses with zone id by ignoring the interface part (#184)
-- Do not crash with asyncio future when non-existing interface is provided (#201)
+- Do not crash with asyncio future error when non-existing interface is provided (#201)
 
 ## [0.7.1] - 2023-03-04
 

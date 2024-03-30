@@ -9,7 +9,7 @@
 # see http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf and
 # related documents for details (look at README for more references)
 #
-# (c) Steffen Christgau, 2017-2021
+# (c) Steffen Christgau, 2017-2024
 
 import sys
 import signal
@@ -44,7 +44,7 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
 
-WSDD_VERSION: str = '0.7.1'
+WSDD_VERSION: str = '0.8'
 
 
 args: argparse.Namespace
