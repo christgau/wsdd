@@ -53,7 +53,13 @@ Sufficient privileges are assumed to be in effect, e.g. by being root or using s
 
 ### Arch Linux
 
-Install wsdd from the [AUR package](https://aur.archlinux.org/wsdd.git).
+Install the [wsdd](https://aur.archlinux.org/packages/wsdd) package from the AUR,
+perhaps with your favorite [AUR helper](https://wiki.archlinux.org/title/AUR_helpers)
+like `paru`.
+
+```
+paru -S wsdd
+```
 
 ### CentOS, Fedora, RHEL
 
