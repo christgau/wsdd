@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## [0.8] -- 2024-03-30
+
+### Added
+
+- Support for OpenBSD (tested on riscv64 with OpenBSD 7.4)
+- Configuration files for firewalld (#186). Thanks to Ondrej Holy.
+- Show device type and allow filtering in API's `list` command (#189). Thanks to Ondrej Holy.
+- Add option `--metadata-timeout` to set the timeout for the HTTP-based metadata exchange (closes #83)
+
+### Changed
+
+- The employed UUID is now read from `/etc/{machine-id,hostid}` before falling by back to the UUID derivation from the host name.
+
+### Fixed
+
+- Handle addresses with zone id by ignoring the interface part (#184)
+- Do not crash with asyncio future error when non-existing interface is provided (#201)
 
 ## [0.7.1] - 2023-03-04
 

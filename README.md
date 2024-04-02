@@ -37,8 +37,8 @@ Samba at some time in the future.
 
 # Requirements
 
-wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD and MacOS. Other Unixes, such
-as OpenBSD or NetBSD, might work as well but were not tested.
+wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD and MacOS.
+Other Unixes, such as NetBSD, might work as well but were not tested.
 
 Although Samba is not strictly required by wsdd itself, it makes sense to run
 wsdd only on hosts with a running Samba daemon. Note that the OpenRC/Gentoo
@@ -64,46 +64,14 @@ can install wsdd like on Fedora where it is sufficient to issue
 dnf install wsdd
 ```
 
-### Debian-based Distributions
+### Debian-based Distributions (Debian, Ubuntu, Mint, ...)
 
-#### Debian
-
-There is currently no package for wsdd in the official Debian repositories.
-However, wsdd is considered to be part of the next Debian release, *Bookworm*, which in the testing phase.
-A wsdd package is also available in *unstable*.
-
-To install wsdd under Bullseye and earlier see the "Others" section below.
-
-#### Ubuntu/Mint
-
-Starting from Ubuntu 22.04 LTS (*Jammy Jellyfish*), wsdd has landed in the official *universe* package repository.
-Thus, it is sufficient to install it via
+Wsdd is included in the official package repositories of Debian and Ubuntu
+(*universe*) since versions 12 (*Bookworm*) and 22.04 LTS (*Jammy Jellyfish*),
+respectively.  This also applies to Linux Mint, starting from version 21
+(Vanessa).  Thus, it is sufficient to install it via
 
 ```
-apt install wsdd
-```
-
-This also applies to Linux Mint, starting from version 21 (Vanessa).
-For older Ubuntu LTS or Linux Mint releases, see the "Others" section below.
-
-#### Others
-
-There are user-maintained packages for which you need to add the repository to the apt repo list and download the according GPG public key:
-
-```
-wget -O- https://pkg.ltec.ch/public/conf/ltec-ag.gpg.key | gpg --dearmour > /usr/share/keyrings/wsdd.gpg
-source /etc/os-release
-echo "deb [signed-by=/usr/share/keyrings/wsdd.gpg] https://pkg.ltec.ch/public/ ${UBUNTU_CODENAME:-${VERSION_CODENAME:-UNKNOWN}} main" > /etc/apt/sources.list.d/wsdd.list
-
-```
-
-Note that the repository only provides packages for Debian and Ubuntu LTS releases up to *Buster* and *Focal Fossa* (20.04), respectively.
-The `wsdd.list` file created by the command above should be checked to refer to an appropriate distro code name.
-
-After the GPG public key file and repository have been created, install wsdd via:
-
-```
-apt update
 apt install wsdd
 ```
 
@@ -120,7 +88,6 @@ pkg install py39-wsdd
 You can choose between two overlays: the GURU project and an [author-maintained
 dedicated overlay](https://github.com/christgau/wsdd-gentoo) which can be selected as follows
 
-
 ```
 emerge eselect-repository
 eselect repository enable guru
@@ -128,7 +95,6 @@ emerge --sync
 ```
 
 After setting up one of them you can install wsdd with
-
 
 ```
 emerge wsdd
@@ -144,10 +110,10 @@ required to run wsdd, so it is advisable to run the service as an unprivileged,
 possibly dedicated, user for the service.
 
 The `etc` directory of the repo contains sample configuration files for
-different init(1) systems, namely FreeBSD's rc.d, Gentoo's openrc, and systemd
+different init(1) systems, e.g. FreeBSD's rc.d, Gentoo's openrc, and systemd
 which is used in most contemporary Linux distros. Those files may be used as
-templates for their actual usage. They are likely to require adjustments to the
-actual distribution/installation where they are to be used.
+templates. They are likely to require adjustments to the actual
+distribution/installation where they are to be used.
 
 # Usage
 
@@ -165,8 +131,8 @@ You should further restrict the traffic to the (link-)local subnet, e.g. by
 using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
 must be enabled in order to get IPv4 multicast traffic working.
 
-For UFW, an application profile can be found under `etc/ufw/applications.d`.
-Note that UFW profile only allow to grant the traffic on specific UDP and TCP
+For UFW and firewald, application/service profiles can be found in the respective directories.
+Note that UFW profiles only allow to grant the traffic on specific UDP and TCP
 ports, but a restriction on the IP range (like link local for IPv6) or the
 multicast traffic is not possible.
 
@@ -221,6 +187,9 @@ below for details.
 	 or a local TCP socket bound to the given PORT. Refer to the man page for
 	 details on the API.
 
+ * `--metadata-timeout TIMEOUT`
+     Set the timeout for HTTP-based metadata exchange. Default is 2.0 seconds.
+
  * `-s`, `--shortlog`
 
      Use a shorter logging format that only includes the level and message.
@@ -238,11 +207,13 @@ below for details.
 
      The WSD specification requires a device to have a unique address that is
      stable across reboots or changes in networks. In the context of the
-     standard, it is assumed that this is something like a serial number. wsdd
-     uses the UUID version 5 with the DNS namespace and the host name of the
-     local machine as inputs. Thus, the host name should be stable and not be
-     modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID
-     you can use this option.
+     standard, it is assumed that this is something like a serial number. Wsdd
+     attempts to read the machine ID from `/etc/machine-id` and `/etc/hostid`
+     (in that order) before potentially chrooting in another environment. If
+     reading the machine ID fails, wsdd falls back to a version 5 UUID with the
+     DNS namespace and the host name of the local machine as inputs. Thus, the
+     host name should be stable and not be modified, e.g. by DHCP. However, if
+     you want wsdd to use a specific UUID you can use this option.
 
  * `-v`, `--verbose`
 
@@ -328,7 +299,7 @@ This mode allows to search for other WSD-compatible devices.
 
 (Read the source for more details)
 
-For each specified (or all) network interfaces, except for loopback, an UDP
+For each specified (or all) network interfaces, except for the loopback, an UDP
 multicast socket for message reception, two UDP sockets for replying using
 unicast as well as sending multicast traffic, and a listening TCP socket are created. This is done for
 both the IPv4 and the IPv6 address family if not configured otherwise by the
@@ -343,25 +314,18 @@ handle network traffic of the different sockets within a single process.
 
 wsdd does not implement any security feature, e.g. by using TLS for the http
 service. This is because wsdd's intended usage is within private, i.e. home,
-LANs. The _Hello_ message contains the hosts transport address, i.e. the IP
-address which speeds up discovery (avoids _Resolve_ message).
+LANs. The _Hello_ message contains the host's transport address, i.e. the IP
+address, which speeds up discovery (avoids _Resolve_ message).
 
 In order to increase the security, use the capabilities of the init system or
-consider the `-u` and `-c` options.
-
-## Using only IPv6 on FreeBSD
-
-If wsdd is running on FreeBSD using IPv6 only, the host running wsdd may not be
-reliably discovered. The reason appears to be that Windows is not always able
-to connect to the HTTP service for unknown reasons. As a workaround, run wsdd
-with IPv4 only.
+consider the `-u` and `-c` options to drop privileges and chroot.
 
 ## Usage with NATs
 
 Do not use wssd on interfaces that are affected by NAT. According to the
-standard, the _ResolveMatch_ messages emitted by wsdd, contain the IP address
+standard, the _ResolveMatch_ messages emitted by wsdd contain the IP address
 ("transport address" in standard parlance) of the interface(s) the application
-has been bound to into. When such messages are retrieved by a client (Windows
+has been bound to. When such messages are retrieved by a client (Windows
 hosts, e.g.) they are unlikely to be able to connect to the provided address
 which has been subject to NAT. To avoid this issue, use the `-i/--interface`
 option to bind wsdd to interfaces not affected by NAT.
@@ -428,15 +392,8 @@ patch set made cross-checking the WSD messages easier.
  * [Discussion at tenforums.com about missing hosts in network](https://www.tenforums.com/network-sharing/31221-windows-10-1511-network-browsing-issue.html)
    Note: Solutions suggest to go back to SMBv1 protocol which is deprecated! Do not follow this advice.
 
- * [Discussion in Synology Community Forum](https://forum.synology.com/enu/viewtopic.php?f=49&t=106924)
-
 ## Other stuff
 
- * Meanwhile, there is a [C implementation of a WSD daemon](https://github.com/Andy2244/wsdd2), named wsdd2.
+ * There is a [C implementation of a WSD daemon](https://github.com/Andy2244/wsdd2), named wsdd2.
    This one also includes LLMNR which wsdd lacks. However, LLMNR may not be required depending on the actual
    network/name resolution setup.
-
- * [OpenWRT includes](https://github.com/openwrt/packages/pull/5563) the above C implementation.
-   So OpenWRT users are unlikely to need an installation of wsdd.
-
- * [FreeNAS](https://redmine.ixsystems.com/issues/72099) appears to have wsdd included in the distribution.

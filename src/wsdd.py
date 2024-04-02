@@ -9,7 +9,7 @@
 # see http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf and
 # related documents for details (look at README for more references)
 #
-# (c) Steffen Christgau, 2017-2021
+# (c) Steffen Christgau, 2017-2024
 
 import sys
 import signal
@@ -44,7 +44,7 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
 
-WSDD_VERSION: str = '0.7.1'
+WSDD_VERSION: str = '0.8'
 
 
 args: argparse.Namespace
@@ -93,7 +93,7 @@ class NetworkAddress:
 
     def __init__(self, family: int, raw: Union[bytes, str], interface: NetworkInterface) -> None:
         self._family = family
-        self._raw_address = raw if isinstance(raw, bytes) else socket.inet_pton(family, raw)
+        self._raw_address = raw if isinstance(raw, bytes) else socket.inet_pton(family, raw.partition('%')[0])
         self._interface = interface
 
         self._address_str = socket.inet_ntop(self._family, self._raw_address)
@@ -287,8 +287,10 @@ class MulticastHandler:
         self.uc_send_socket.bind((self.address.address_str, WSD_UDP_PORT))
 
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
-        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, args.hoplimit)
+        # OpenBSD requires the optlen to be sizeof(char) for LOOP and TTL options
+        # (see also https://github.com/python/cpython/issues/67316)
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, struct.pack('B', 0))
+        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('B', args.hoplimit))
 
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
 
@@ -464,7 +466,7 @@ class WSDMessageHandler(INetworkPacketHandler):
         msg_id = ElementTree.SubElement(header, 'wsa:MessageID')
         msg_id.text = uuid.uuid1().urn
 
-        if request_header:
+        if request_header is not None:
             req_msg_id = request_header.find('./wsa:MessageID', namespaces)
             if req_msg_id is not None:
                 relates_to = ElementTree.SubElement(header, 'wsa:RelatesTo')
@@ -617,12 +619,14 @@ class WSDDiscoveredDevice:
     props: Dict[str, str]
     display_name: str
     last_seen: float
+    types: Set[str]
 
     def __init__(self, xml_str: str, xaddr: str, interface: NetworkInterface) -> None:
         self.last_seen = 0.0
         self.addresses = {}
         self.props = {}
         self.display_name = ''
+        self.types = set()
 
         self.update(xml_str, xaddr, interface)
 
@@ -679,9 +683,8 @@ class WSDDiscoveredDevice:
             self.props[tag_name] = str(node.text)
 
     def extract_host_props(self, root: ElementTree.Element) -> None:
-        types = root.findtext('wsdp:Types', '', namespaces)
-        self.props['types'] = types.split(' ')[0]
-        if types != PUB_COMPUTER:
+        self.types = set(root.findtext('wsdp:Types', '', namespaces).split(' '))
+        if PUB_COMPUTER not in self.types:
             return
 
         comp = root.findtext(PUB_COMPUTER, '', namespaces)
@@ -850,7 +853,7 @@ class WSDClient(WSDUDPMessageHandler):
             request.add_header('Host', host)
 
         try:
-            with urllib.request.urlopen(request, None, 2.0) as stream:
+            with urllib.request.urlopen(request, None, args.metadata_timeout) as stream:
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
             logger.warning('could not fetch metadata from: {} {}'.format(url, e))
@@ -1162,7 +1165,8 @@ class ApiServer:
             logger.debug('clearing list of known devices')
             WSDDiscoveredDevice.instances.clear()
         elif command == 'list' and args.discovery:
-            write_stream.write(bytes(self.get_list_reply(), 'utf-8'))
+            wsd_type = command_args[0] if command_args else None
+            write_stream.write(bytes(self.get_list_reply(wsd_type), 'utf-8'))
         elif command == 'quit':
             write_stream.close()
         elif command == 'start':
@@ -1175,19 +1179,23 @@ class ApiServer:
     def get_clients_by_interface(self, interface: Optional[str]) -> List[WSDClient]:
         return [c for c in WSDClient.instances if c.mch.address.interface.name == interface or not interface]
 
-    def get_list_reply(self) -> str:
+    def get_list_reply(self, wsd_type: Optional[str]) -> str:
         retval = ''
         for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
+            if wsd_type and (wsd_type not in dev.types):
+                continue
+
             addrs_str = []
             for addrs in dev.addresses.items():
                 addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))
 
-            retval = retval + '{}\t{}\t{}\t{}\t{}\n'.format(
+            retval = retval + '{}\t{}\t{}\t{}\t{}\t{}\n'.format(
                 dev_uuid,
                 dev.display_name,
                 dev.props['BelongsTo'] if 'BelongsTo' in dev.props else '',
                 datetime.datetime.fromtimestamp(dev.last_seen).isoformat('T', 'seconds'),
-                ','.join(addrs_str))
+                ','.join(addrs_str),
+                ','.join(dev.types))
 
         retval += '.\n'
         return retval
@@ -1369,6 +1377,9 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
             s.server_close()
 
         self.http_servers.clear()
+
+        if not self.teardown_tasks:
+            return
 
         if not self.aio_loop.is_running():
             # Wait here for all pending tasks so that the main loop can be finished on termination.
@@ -1571,7 +1582,7 @@ NET_RT_IFLIST: int = 3
 
 # from sys/net/if.h
 IFF_LOOPBACK: int = 0x8
-IFF_MULTICAST: int = 0x800
+IFF_MULTICAST: int = 0x800 if platform.system() != 'OpenBSD' else 0x8000
 
 # sys/netinet6/in6_var.h
 IN6_IFF_TENTATIVE: int = 0x02
@@ -1586,28 +1597,38 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
     Implementation of the AddressMonitor for FreeBSD and Darwin using route sockets
     """
 
-    # Common definition for beginning part of if(m?a)?_msghdr structs (see net/if.h).
-    IF_COMMON_HDR_DEF: str = '@HBBii'
+    # Common definition for beginning part of if(m?a)?_msghdr structs (see net/if.h/man 4 route).
+    IF_COMMON_HDR_DEF = '@HBBii' if platform.system() != 'OpenBSD' else '@HBBHHHBBiii'
+
+    # from net/if.h
     RTM_NEWADDR: int = 0xC
     RTM_DELADDR: int = 0xD
+    # not tested for OpenBSD
     RTM_IFINFO: int = 0xE
 
+    # from route.h (value equals for FreeBSD, Darwin and OpenBSD)
+    RTM_VERSION: int = 0x5
+
     # from net/if.h (struct ifa_msghdr)
-    IFA_MSGHDR_DEF: str = IF_COMMON_HDR_DEF + 'hi'
+    IFA_MSGHDR_DEF: str = IF_COMMON_HDR_DEF + ('hi' if platform.system() != 'OpenBSD' else '')
     IFA_MSGHDR_SIZE: int = struct.calcsize(IFA_MSGHDR_DEF)
 
-    IF_MSGHDR_DEF_BASE: str = IF_COMMON_HDR_DEF + 'h'
     # The struct package does not allow to specify those, thus we hard code them as chars (x4).
-    IF_DATA_DEFS: Dict[str, str] = {
+    IF_MSG_DEFS: Dict[str, str] = {
         # if_data in if_msghdr is prepended with an u_short _ifm_spare1, thus the 'H' a the beginning)
-        'FreeBSD': 'H6c2c8c8c104c8c16c',
+        'FreeBSD': 'hH6c2c8c8c104c8c16c',
         # There are 8 bytes and 22 uint32_t in the if_data struct (22 x 4 Bytes + 8 = 96 Bytes)
         # It is also aligned on 4-byte boundary necessitating 2 bytes padding inside if_msghdr
-        'Darwin': '2c8c22I'
+        'Darwin': 'h2c8c22I',
+        # struct if_data from /src/sys/net/if.h for if_msghdr
+        #  (includes struct timeval which is a int64 + long
+        'OpenBSD': '4c3I13Q1Iql'
     }
 
     socket: socket.socket
     intf_blacklist: List[str]
+
+    is_openbsd: bool = False
 
     def __init__(self, aio_loop: asyncio.AbstractEventLoop) -> None:
         super().__init__(aio_loop)
@@ -1618,7 +1639,8 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         self.socket = socket.socket(socket.AF_ROUTE, socket.SOCK_RAW, socket.AF_UNSPEC)
         self.aio_loop.add_reader(self.socket.fileno(), self.handle_change)
 
-        self.IF_MSGHDR_SIZE = struct.calcsize(self.IF_MSGHDR_DEF_BASE + self.IF_DATA_DEFS[platform.system()])
+        self.IF_MSGHDR_SIZE = struct.calcsize(self.IF_COMMON_HDR_DEF + self.IF_MSG_DEFS[platform.system()])
+        self.is_openbsd = platform.system() == 'OpenBSD'
 
     def do_enumerate(self) -> None:
         super().do_enumerate()
@@ -1652,9 +1674,20 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         intf_flags = 0
         while offset < len(buf):
             # unpack route message response
-            rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(self.IF_COMMON_HDR_DEF, buf, offset)
+            if not self.is_openbsd:
+                rtm_len, rtm_version, rtm_type, addr_mask, flags = struct.unpack_from(
+                    self.IF_COMMON_HDR_DEF, buf, offset)
+            else:
+                rtm_len, rtm_version, rtm_type, ifa_hdr_len, _, _, _, _, addr_mask, flags, _ = struct.unpack_from(
+                    self.IF_COMMON_HDR_DEF, buf, offset)
 
-            if rtm_type not in [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]:
+            # exit condition for OpenBSD where always the complete buffer (ie 4096 bytes) is returned
+            if rtm_len == 0:
+                break
+
+            # skip over non-understood packets and versions
+            if (rtm_type not in [self.RTM_NEWADDR, self.RTM_DELADDR, self.RTM_IFINFO]) or (
+                    rtm_version != self.RTM_VERSION):
                 offset += rtm_len
                 continue
 
@@ -1825,6 +1858,10 @@ def parse_args() -> None:
         '-V', '--version',
         help='show version number and exit',
         action='store_true')
+    parser.add_argument(
+        '--metadata-timeout',
+        help='set timeout for HTTP-based metadata exchange',
+        default=2.0)
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1853,7 +1890,19 @@ def parse_args() -> None:
         logger.warning('no interface given, using all interfaces')
 
     if not args.uuid:
-        args.uuid = uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
+        def read_uuid_from_file(fn: str) -> Union[None, uuid.UUID]:
+            try:
+                with open(fn) as f:
+                    s: str = f.readline().strip()
+                    return uuid.UUID(s)
+            except Exception:
+                return None
+
+        # machine uuid: try machine-id file first but also check for hostid (FreeBSD)
+        args.uuid = read_uuid_from_file('/etc/machine-id') or \
+            read_uuid_from_file('/etc/hostid') or \
+            uuid.uuid5(uuid.NAMESPACE_DNS, socket.gethostname())
+
         logger.info('using pre-defined UUID {0}'.format(str(args.uuid)))
     else:
         args.uuid = uuid.UUID(args.uuid)
@@ -1921,7 +1970,7 @@ def drop_privileges(uid: int, gid: int) -> bool:
 def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> NetworkAddressMonitor:
     if system == 'Linux':
         return NetlinkAddressMonitor(aio_loop)
-    elif system in ['FreeBSD', 'Darwin']:
+    elif system in ['FreeBSD', 'Darwin', 'OpenBSD']:
         return RouteSocketAddressMonitor(aio_loop)
     else:
         raise NotImplementedError('unsupported OS: ' + system)

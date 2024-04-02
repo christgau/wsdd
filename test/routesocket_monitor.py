@@ -6,6 +6,7 @@
 import socket
 import struct
 import ctypes.util
+import platform
 
 # from sys/net/route.h
 RTM_NEWADDR = 0xC
@@ -20,7 +21,7 @@ NET_RT_IFLIST = 3
 
 # from sys/net/if.h
 IFF_LOOPBACK = 0x8
-IFF_MULTICAST = 0x800
+IFF_MULTICAST = 0x800 if platform.system() != 'OpenBSD' else 0x8000
 
 SA_ALIGNTO = ctypes.sizeof(ctypes.c_long)
 
@@ -34,9 +35,13 @@ def parse_route_socket_response(buf, keep_link):
     link = None
     print(len(buf))
     while offset < len(buf):
-        # mask(addrs) has same offset in if_msghdr and ifs_msghdr
-        rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(
-            '@HBBii', buf, offset)
+        if platform.system() != 'OpenBSD':
+            # mask(addrs) has same offset in if_msghdr and ifs_msghdr
+            rtm_len, _, rtm_type, addr_mask, flags = struct.unpack_from(
+                '@HBBii', buf, offset)
+        else:
+            rtm_len, _, rtm_type, hdr_len, if_idx, ignore_table, ignore_prio, ignore_mlps, addr_mask, flags, change_mask = struct.unpack_from(
+                '@HBBHHHBBiii', buf, offset)
 
         msg_type = ''
         if rtm_type not in [RTM_NEWADDR, RTM_DELADDR, RTM_IFINFO]:
@@ -44,8 +49,12 @@ def parse_route_socket_response(buf, keep_link):
             continue
 
         # those offset may unfortunately be architecture dependent
-        # (152 is FreeBSD-specific)
-        sa_offset = offset + ((16 + 152) if rtm_type == RTM_IFINFO else 20)
+        if platform.system() != 'OpenBSD':
+            # (152 is FreeBSD-specific)
+            sa_offset = offset + ((16 + 152) if rtm_type == RTM_IFINFO else 20)
+        else:
+            # RTM_IFINFO not tested, offset might be wrong
+            sa_offset = offset + ((16 + 152) if rtm_type == RTM_IFINFO else 24)
 
         if rtm_type in [RTM_NEWADDR, RTM_IFINFO]:
             msg_type = 'NEW'

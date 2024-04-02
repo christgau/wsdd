@@ -51,6 +51,9 @@ traffic to more than one interface.
 This option also accepts IP addresses that the service should bind to.
 For IPv6, only link local addresses are actually considered as noted above.
 .TP
+\fB\-\-metadata-timeout\ \fITIMEOUT\fR
+Set the timeout for HTTP-based metadata exchange. Default is 2.0 seconds.
+.TP
 \fB\-s\fR, \fB\-\-shortlog\fR
 Use a shorter logging format that only includes the level and message.
 This is useful in cases where the logging mechanism, like systemd on Linux,
@@ -63,13 +66,15 @@ if the execution environment, like the init system, cannot ensure this in
 another way.
 .TP
 \fB\-U \fIUUID\fR, \fB\-\-uuid \fIUUID\fR
-The WSD specification requires a device to have a unique address that is
-stable across reboots or changes in networks. In the context of the
-standard, it is assumed that this is something like a serial number. wsdd
-uses the UUID version 5 with the DNS namespace and the host name of the
-local machine as inputs. Thus, the host name should be stable and not be
-modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID
-you can use this option.
+The WSD specification requires a device to have a unique address that is stable
+across reboots or changes in networks. In the context of the standard, it is
+assumed that this is something like a serial number. Wsdd attempts to read the
+machine ID from /etc/machine-id and /etc/hostid (in that order) before
+potentially chrooting in another environment. If reading the machine ID fails,
+wsdd falls back to a version 5 UUID with the DNS namespace and the host name of
+the local machine as inputs. Thus, the host name should be stable and not be
+modified, e.g. by DHCP. However, if you want wsdd to use a specific UUID you
+can use this option.
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Additively increase verbosity of the log output. A single occurrence of
@@ -162,10 +167,12 @@ only. The following commands can be issued:
 Clears the list of all discovered devices. Use the \fBprobe\fR command to
 search for devices again. This command does not return any data and is only
 available in discover mode.
-.SS \fBlist\fR - List discovered devices
-Returns a tab-separated list of discovered devices with the following information.
-The possibly empty list of detected hosts is always terminated with a single
-dot ('.') in an otherwise empty line. This command is only available in discover mode.
+.SS \fBlist \fI[TYPE]\fR - List discovered devices
+Returns a tab-separated list of discovered devices of the provided TYPE (e.g.
+"pub:Computer") with the following information. If no type is provided, all
+discovered devices are listed. The possibly empty list of detected hosts is
+always terminated with a single dot ('.') in an otherwise empty line. This
+command is only available in discover mode.
 .TP
 UUID
 UUID of the discovered device. Note that a multi-homed device should appear
@@ -190,6 +197,9 @@ process delimited by commas.  Addresses are provided along with the interface
 (separated by '%') on which they were discovered.  IPv6 addresses are reported
 on square brackets. Note that the reported addresses may not match the actual
 device on which the device may be reached.
+.TP
+types
+Types of the detected device, delimited by commas.
 .SS \fBprobe \fI[INTERFACE]\fR - Search for devices
 Triggers a Probe message on the provided INTERFACE (eth0, e.g.) to search for
 WSD hosts. If no interface is provided, all interfaces wsdd listens on are probed.
