@@ -646,7 +646,7 @@ class WSDDiscoveredDevice:
             elif dialect == WSDP_URI + '/Relationship':
                 host_xpath = 'wsdp:Relationship[@Type="{}/host"]/wsdp:Host'.format(WSDP_URI)
                 host_sec = section.find(host_xpath, namespaces)
-                if (host_sec):
+                if (host_sec is not None):
                     self.extract_host_props(host_sec)
             else:
                 logger.debug('unknown metadata dialect ({})'.format(dialect))
