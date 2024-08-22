@@ -1,4 +1,6 @@
-FROM python:slim
+FROM python:alpine
+
+RUN apk update && apk add --no-cache bash
 
 RUN mkdir /code
 
