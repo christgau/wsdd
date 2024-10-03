@@ -142,7 +142,7 @@ domain socket to which a client can connect to.
     wsdd \-\-interface eth0 \-\-interface eth2 \-\-ipv6only
 .SS Set the Workgroup according to smb.conf, be verbose, run with dropped privileges, and change the root directory to an (empty) directory
 
-    SMB_GROUP=$(grep \-i '^\s*workgroup\s*=' smb.conf | cut \-f2 \-d= | tr \-d '[:blank:]')
+    SMB_GROUP=$(grep \-i '^\\s*workgroup\\s*=' smb.conf | cut \-f2 \-d= | tr \-d '[:blank:]')
 
     wsdd \-v \-w $SMB_GROUP -u daemon:daemon -c /var/run/wsdd/chroot
 .SH FIREWALL SETUP
