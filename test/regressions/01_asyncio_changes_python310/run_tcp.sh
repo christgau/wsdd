@@ -4,7 +4,7 @@
 # The API for ´start_server´ was schanged in 3.10.
 # @see related Github issue #162
 
-python_versions=('3' '3.7' '3.8' '3.9.' '3.10' '3.11')
+python_versions=('3' '3.7' '3.8' '3.9.' '3.10' '3.11' '3.12')
 
 socket_port="3333"
 
