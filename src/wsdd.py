@@ -34,12 +34,11 @@ import pwd
 import grp
 import datetime
 
-from typing import Any, Callable, ClassVar, Deque, Dict, List, Optional, Set, Union, Tuple, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Deque, Dict, List, Optional, Set, Union, Tuple
 
 # try to load more secure XML module first, fallback to default if not present
 try:
-    if not TYPE_CHECKING:
-        from defusedxml.ElementTree import fromstring as ETfromString
+    from defusedxml.ElementTree import fromstring as ETfromString
 except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
