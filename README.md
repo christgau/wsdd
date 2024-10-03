@@ -131,7 +131,7 @@ You should further restrict the traffic to the (link-)local subnet, e.g. by
 using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
 must be enabled in order to get IPv4 multicast traffic working.
 
-For UFW and firewald, application/service profiles can be found in the respective directories.
+For UFW and firewalld, application/service profiles can be found in the respective directories.
 Note that UFW profiles only allow to grant the traffic on specific UDP and TCP
 ports, but a restriction on the IP range (like link local for IPv6) or the
 multicast traffic is not possible.
