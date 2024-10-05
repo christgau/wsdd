@@ -111,11 +111,12 @@ class NetworkAddress:
 
     @property
     def is_multicastable(self):
+        """ return true if the (interface) address can be used for creating (link-local) multicasting sockets  """
         # Nah, this check is not optimal but there are no local flags for
         # addresses, but it should be safe for IPv4 anyways
         # (https://tools.ietf.org/html/rfc5735#page-3)
-        return ((self._family == socket.AF_INET) and (self._raw_address[0] == 127)
-                or (self._family == socket.AF_INET6) and (self._raw_address[0:2] != b'\xfe\x80'))
+        return ((self._family == socket.AF_INET) and (self._raw_address[0] != 127)
+                or (self._family == socket.AF_INET6) and (self._raw_address[0:2] == b'\xfe\x80'))
 
     @property
     def raw(self):
@@ -1302,7 +1303,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         if args.ipv6only and address.family != socket.AF_INET6:
             return False
 
-        if address.is_multicastable:
+        if not address.is_multicastable:
             return False
 
         # Use interface only if it's in the list of user-provided interface names
