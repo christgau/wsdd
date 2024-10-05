@@ -263,6 +263,13 @@ class MulticastHandler:
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
 
+        # bind multicast socket to interface address and a user-provided port (or random if unspecified)
+        # this allows not-so-smart firewalls to whitelist another port to allow incoming replies
+        try:
+            self.mc_send_socket.bind((str(self.address), args.source_port, 0, idx))
+        except OSError:
+            logger.error('specified port {} already in use for {}'.format(args.source_port, str(self.address)))
+
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self) -> None:
@@ -291,6 +298,13 @@ class MulticastHandler:
         # (see also https://github.com/python/cpython/issues/67316)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, struct.pack('B', 0))
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('B', args.hoplimit))
+
+        # bind multicast socket to interface address and a user-provided port (or random if unspecified)
+        # this allows not-so-smart firewalls to whitelist another port to allow incoming replies
+        try:
+            self.mc_send_socket.bind((self.address.address_str, args.source_port))
+        except OSError:
+            logger.error('specified port {} already in use for {}'.format(args.source_port, self.address.address_str))
 
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
 
@@ -1862,6 +1876,11 @@ def parse_args() -> None:
         '--metadata-timeout',
         help='set timeout for HTTP-based metadata exchange',
         default=2.0)
+    parser.add_argument(
+        '--source-port',
+        help='send multicast traffic/receive replies on this port',
+        type=int,
+        default=0)
 
     args = parser.parse_args(sys.argv[1:])
 

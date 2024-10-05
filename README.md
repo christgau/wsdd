@@ -190,6 +190,13 @@ below for details.
  * `--metadata-timeout TIMEOUT`
      Set the timeout for HTTP-based metadata exchange. Default is 2.0 seconds.
 
+ * `--source-port PORT`
+     Set the source port for outgoing multicast messages, so that replies will
+     use this as the destination port.
+     This is useful for firewalls that do not detect incoming unicast replies
+     to a multicast as part of the flow, so the port needs to be fixed in order
+     to be allowed manually.
+
  * `-s`, `--shortlog`
 
      Use a shorter logging format that only includes the level and message.

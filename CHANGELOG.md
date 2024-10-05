@@ -1,5 +1,11 @@
 # Changelog
 
+## unreleased
+
+### Added
+
+- Add command line argument to set source port for multicast message for better firewall interoperability (#216)
+
 ## [0.8] -- 2024-03-30
 
 ### Added
