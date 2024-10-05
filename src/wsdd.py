@@ -266,9 +266,9 @@ class MulticastHandler:
         # bind multicast socket to interface address and a user-provided port (or random if unspecified)
         # this allows not-so-smart firewalls to whitelist another port to allow incoming replies
         try:
-            self.mc_send_socket.bind((str(self.address), args.reply_port, 0, idx))
+            self.mc_send_socket.bind((str(self.address), args.source_port, 0, idx))
         except OSError:
-            logger.error('specified port {} already in use for {}'.format(args.reply_port, str(self.address)))
+            logger.error('specified port {} already in use for {}'.format(args.source_port, str(self.address)))
 
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT, 0, idx)
 
@@ -302,9 +302,9 @@ class MulticastHandler:
         # bind multicast socket to interface address and a user-provided port (or random if unspecified)
         # this allows not-so-smart firewalls to whitelist another port to allow incoming replies
         try:
-            self.mc_send_socket.bind((self.address.address_str, args.reply_port))
+            self.mc_send_socket.bind((self.address.address_str, args.source_port))
         except OSError:
-            logger.error('specified port {} already in use for {}'.format(args.reply_port, self.address.address_str))
+            logger.error('specified port {} already in use for {}'.format(args.source_port, self.address.address_str))
 
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
 
@@ -1877,8 +1877,8 @@ def parse_args() -> None:
         help='set timeout for HTTP-based metadata exchange',
         default=2.0)
     parser.add_argument(
-        '--reply-port',
-        help='recieve replies to multicast on this port',
+        '--source-port',
+        help='send multicast traffic/receive replies on this port',
         type=int,
         default=0)
 
