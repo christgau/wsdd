@@ -1,0 +1,16 @@
+[Unit]
+Description=Web Services Dynamic Discovery service
+Documentation=man:wsdd(8)
+Requires=wsdd-discovery.socket
+RefuseManualStart=true
+
+[Service]
+Type=simple
+; The service is put into an empty runtime directory chroot,
+; i.e. the runtime directory which usually resides under /run
+ExecStart=/usr/bin/wsdd --shortlog --chroot=/run/wsdd --source-port=37020 --no-host --discovery
+DynamicUser=yes
+User=wsdd
+Group=wsdd
+RuntimeDirectory=wsdd
+AmbientCapabilities=CAP_SYS_CHROOT

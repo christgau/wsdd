@@ -42,6 +42,11 @@ try:
 except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
+try:
+    import systemd.daemon
+except ModuleNotFoundError:
+    # Non-systemd host
+    pass
 
 WSDD_VERSION: str = '0.8'
 
@@ -1137,7 +1142,10 @@ class ApiServer:
         # It appears mypy is not able to check the argument to create_task and the return value of start_server
         # correctly. The docs say start_server returns a coroutine and the create_task takes a coro. And: It works.
         # Thus, we ignore type errors here.
-        if isinstance(listen_address, int) or listen_address.isnumeric():
+        if isinstance(listen_address, socket.SocketType):
+            self.server = await aio_loop.create_task(asyncio.start_unix_server(  # type: ignore
+                self.on_connect, sock=listen_address))
+        elif isinstance(listen_address, int) or listen_address.isnumeric():
             self.server = await aio_loop.create_task(asyncio.start_server(  # type: ignore
                 self.on_connect, host='localhost', port=int(listen_address), reuse_address=True,
                 reuse_port=True))
@@ -2010,6 +2018,15 @@ def main() -> int:
     api_server = None
     if args.listen:
         api_server = ApiServer(aio_loop, args.listen, nm)
+    else:
+        fds = []
+        try:
+            fds = systemd.daemon.listen_fds()
+        except NameError:
+            # Non-systemd host
+            pass
+        if fds:
+            api_server = ApiServer(aio_loop, socket.socket(fileno=fds[0]), nm)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:
