@@ -1125,10 +1125,12 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 class ApiServer:
 
     address_monitor: 'NetworkAddressMonitor'
+    clients: List[asyncio.StreamWriter]
 
     def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: bytes,
                  address_monitor: 'NetworkAddressMonitor') -> None:
         self.server = None
+        self.clients = []
         self.address_monitor = address_monitor
 
         # defer server creation
@@ -1148,6 +1150,7 @@ class ApiServer:
                 self.on_connect, path=listen_address))
 
     async def on_connect(self, read_stream: asyncio.StreamReader, write_stream: asyncio.StreamWriter) -> None:
+        self.clients.append(write_stream)
         while True:
             try:
                 line = await read_stream.readline()
@@ -1156,12 +1159,14 @@ class ApiServer:
                     if not write_stream.is_closing():
                         await write_stream.drain()
                 else:
+                    self.clients.remove(write_stream)
                     write_stream.close()
                     return
             except UnicodeDecodeError as e:
                 logger.debug('invalid input utf8', e)
             except Exception as e:
                 logger.warning('exception in API client', e)
+                self.clients.remove(write_stream)
                 write_stream.close()
                 return
 
@@ -1221,6 +1226,8 @@ class ApiServer:
         await self.create_task
         if self.server:
             self.server.close()
+            for client in self.clients:
+                client.close()
             await self.server.wait_closed()
 
 
