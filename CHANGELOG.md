@@ -5,6 +5,7 @@
 ### Added
 
 - Add command line argument to set source port for multicast message for better firewall interoperability (#216)
+- Add initial support for SunOS (#223), without dynamic address/interface monitoring. Thanks to Carsten Grzemba.
 
 ### Changed
 

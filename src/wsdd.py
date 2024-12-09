@@ -278,7 +278,10 @@ class MulticastHandler:
         self.multicast_address = UdpAddress(self.address.family, raw_mc_addr, self.address.interface)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
-        mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
+        if platform.system() == 'SunOS':
+            mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw)
+        else:
+            mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
         self.recv_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         if platform.system() == 'Linux':
@@ -293,7 +296,10 @@ class MulticastHandler:
         # bind unicast socket to interface address and WSD's udp port
         self.uc_send_socket.bind((self.address.address_str, WSD_UDP_PORT))
 
-        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
+        if platform.system() == 'SunOS':
+            self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, self.address.raw)
+        else:
+            self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
         # OpenBSD requires the optlen to be sizeof(char) for LOOP and TTL options
         # (see also https://github.com/python/cpython/issues/67316)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, struct.pack('B', 0))
@@ -1793,6 +1799,58 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         super().cleanup()
 
 
+class DladmAddressMonitor(NetworkAddressMonitor):
+
+    class sockaddr(ctypes.Structure):
+        _fields_ = [("family", ctypes.c_ushort),
+                    ("dummy", ctypes.c_ushort),
+                    ("data", ctypes.c_ubyte * 14)]
+
+    class ifaddrs(ctypes.Structure):
+        pass
+
+    ifaddrs._fields_ = [("next", ctypes.POINTER(ifaddrs)),
+                        ("name", ctypes.c_char_p),
+                        ("flags", ctypes.c_ulonglong),
+                        ("addr", ctypes.POINTER(sockaddr)),
+                        ("netmask", ctypes.POINTER(sockaddr)),
+                        ("dstaddr", ctypes.POINTER(sockaddr)),
+                        ("data", ctypes.c_void_p)]
+
+    def freeifaddrs(self, ifa) -> None:
+        libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+        while ifa.next:
+            curr = ifa
+            ifa = ifa.next[0]
+            libc.free(curr.name)
+            libc.free(curr.addr)
+            libc.free(curr.netmask)
+            libc.free(curr.dstaddr)
+            libc.free(curr.data)
+            del curr
+
+    def do_enumerate(self) -> None:
+        super().do_enumerate()
+        libsocket = ctypes.CDLL(ctypes.util.find_library('socket'), use_errno=True)
+        ifas = self.ifaddrs()
+        if libsocket.getifaddrs(ctypes.byref(ifas)) == 0:
+            ifa = ifas
+            ifa_idx = 0
+            while ifa.next:
+                if ifa.name:
+                    logger.debug("{}%{}".format(
+                        socket.inet_ntop(ifa.addr[0].family, bytes(ifa.addr[0].data[:4])),
+                        ifa.name.decode()))
+                    addr = socket.inet_ntop(ifa.addr[0].family, bytes(ifa.addr[0].data[:4]))
+                    intf = NetworkInterface(ifa.name.decode(), 0, ifa_idx)
+                    self.add_interface(intf)
+                    self.handle_new_address(NetworkAddress(ifa.addr[0].family, addr, intf))
+                    ifa_idx += 1
+
+                ifa = ifa.next[0]
+            self.freeifaddrs(ifas)
+
+
 def sigterm_handler() -> None:
     logger.info('received termination/interrupt signal, tearing down')
     # implictely raise SystemExit to cleanup properly
@@ -2000,6 +2058,8 @@ def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> 
         return NetlinkAddressMonitor(aio_loop)
     elif system in ['FreeBSD', 'Darwin', 'OpenBSD']:
         return RouteSocketAddressMonitor(aio_loop)
+    elif system == 'SunOS':
+        return DladmAddressMonitor(aio_loop)
     else:
         raise NotImplementedError('unsupported OS: ' + system)
 
