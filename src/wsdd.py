@@ -871,6 +871,8 @@ class WSDClient(WSDUDPMessageHandler):
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
             logger.warning('could not fetch metadata from: {} {}'.format(url, e))
+        except TimeoutError:
+            logger.warning('metadata exchange with {} timed out'.format(url))
 
     def build_getmetadata_message(self, endpoint) -> str:
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
