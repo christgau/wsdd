@@ -37,8 +37,9 @@ Samba at some time in the future.
 
 # Requirements
 
-wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD and MacOS.
-Other Unixes, such as NetBSD, might work as well but were not tested.
+wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD,
+MacOS and SunOS/Illumos. Other Unixes, such as NetBSD, might work as well but
+were not tested.
 
 Although Samba is not strictly required by wsdd itself, it makes sense to run
 wsdd only on hosts with a running Samba daemon. Note that the OpenRC/Gentoo
