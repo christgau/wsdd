@@ -1129,7 +1129,7 @@ class ApiServer:
 
     address_monitor: 'NetworkAddressMonitor'
 
-    def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: bytes,
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: Any,
                  address_monitor: 'NetworkAddressMonitor') -> None:
         self.server = None
         self.address_monitor = address_monitor
@@ -1143,6 +1143,7 @@ class ApiServer:
         # correctly. The docs say start_server returns a coroutine and the create_task takes a coro. And: It works.
         # Thus, we ignore type errors here.
         if isinstance(listen_address, socket.SocketType):
+            # create socket from systemd file descriptor/socket
             self.server = await aio_loop.create_task(asyncio.start_unix_server(  # type: ignore
                 self.on_connect, sock=listen_address))
         elif isinstance(listen_address, int) or listen_address.isnumeric():
@@ -2018,13 +2019,8 @@ def main() -> int:
     api_server = None
     if args.listen:
         api_server = ApiServer(aio_loop, args.listen, nm)
-    else:
-        fds = []
-        try:
-            fds = systemd.daemon.listen_fds()
-        except NameError:
-            # Non-systemd host
-            pass
+    elif 'systemd' in sys.modules:
+        fds = systemd.daemon.listen_fds()
         if fds:
             api_server = ApiServer(aio_loop, socket.socket(fileno=fds[0]), nm)
 
