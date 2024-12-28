@@ -1,0 +1,9 @@
+[Unit]
+Description=Web Services Dynamic Discovery API socket
+Documentation=man:wsdd(8)
+
+[Socket]
+ListenStream=%t/wsdd.socket
+
+[Install]
+WantedBy=sockets.target

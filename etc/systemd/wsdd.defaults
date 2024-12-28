@@ -3,3 +3,4 @@
 # Refer to the wsdd(8) man page for details
 
 WSDD_PARAMS=""
+WSDD_DISCOVERY_PARAMS=""
