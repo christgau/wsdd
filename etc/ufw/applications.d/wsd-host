@@ -1,0 +1,4 @@
+[wsdd]
+title=WSD Host
+description=Make host visible for device discovery
+ports=3702/udp|5357/tcp
