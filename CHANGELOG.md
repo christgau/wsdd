@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Devices are now recorded based on their URI provided in the endpoint reference address, which is not neccessarily a UUID. This also affects API (see #226).
 - make `/etc/default/wsdd` optional for systemd (see #212)
 
 ## [0.8] -- 2024-03-30

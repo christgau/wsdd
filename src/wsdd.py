@@ -797,9 +797,9 @@ class WSDClient(WSDUDPMessageHandler):
     def handle_bye(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         bye_path = 'wsd:Bye'
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
-        device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in WSDDiscoveredDevice.instances:
-            del WSDDiscoveredDevice.instances[device_uuid]
+        device_uri = urllib.parse.urlparse(endpoint).geturl()
+        if device_uri in WSDDiscoveredDevice.instances:
+            del WSDDiscoveredDevice.instances[device_uri]
 
         return None
 
@@ -890,11 +890,11 @@ class WSDClient(WSDUDPMessageHandler):
         return self.xml_to_str(tree)
 
     def handle_metadata(self, meta: str, endpoint: str, xaddr: str) -> None:
-        device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in WSDDiscoveredDevice.instances:
-            WSDDiscoveredDevice.instances[device_uuid].update(meta, xaddr, self.mch.address.interface)
+        device_uri = urllib.parse.urlparse(endpoint).geturl()
+        if device_uri in WSDDiscoveredDevice.instances:
+            WSDDiscoveredDevice.instances[device_uri].update(meta, xaddr, self.mch.address.interface)
         else:
-            WSDDiscoveredDevice.instances[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch.address.interface)
+            WSDDiscoveredDevice.instances[device_uri] = WSDDiscoveredDevice(meta, xaddr, self.mch.address.interface)
 
     def remove_outdated_probes(self) -> None:
         cut = time.time() - PROBE_TIMEOUT * 2
@@ -1217,7 +1217,7 @@ class ApiServer:
 
     def get_list_reply(self, wsd_type: Optional[str]) -> str:
         retval = ''
-        for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
+        for dev_uri, dev in WSDDiscoveredDevice.instances.items():
             if wsd_type and (wsd_type not in dev.types):
                 continue
 
@@ -1226,7 +1226,7 @@ class ApiServer:
                 addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\t{}\n'.format(
-                dev_uuid,
+                dev_uri,
                 dev.display_name,
                 dev.props['BelongsTo'] if 'BelongsTo' in dev.props else '',
                 datetime.datetime.fromtimestamp(dev.last_seen).isoformat('T', 'seconds'),
