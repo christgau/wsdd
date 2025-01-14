@@ -43,7 +43,7 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
 try:
-    import systemd.daemon
+    import systemd.daemon  # type: ignore
 except ModuleNotFoundError:
     # Non-systemd host
     pass
@@ -797,7 +797,7 @@ class WSDClient(WSDUDPMessageHandler):
     def handle_bye(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         bye_path = 'wsd:Bye'
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
-        device_uri = urllib.parse.urlparse(endpoint).geturl()
+        device_uri = str(urllib.parse.urlparse(endpoint).geturl())
         if device_uri in WSDDiscoveredDevice.instances:
             del WSDDiscoveredDevice.instances[device_uri]
 
