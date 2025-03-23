@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <service>
-  <short>Web Services Dynamic Discovery host daemon (HTTP Interface)</short>
-  <description>wsdd implements a Web Service Discovery host daemon. This enables (Samba) hosts, like your local NAS device, to be found by Web Service Discovery Clients like Windows.</description>
+  <short>Web Services Dynamic Discovery HTTP Interface</short>
+  <description>HTTP interface of the Web Service Discovery host daemon, such as wsdd. This service enables the host to be discovered by WSD clients such as Windows.</description>
   <port port="5357" protocol="tcp"/>
 </service>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>Web Services Dynamic Discovery client</short>
+  <description>Discovery of other Web Services Dynamic Discovery hosts, using a fixed UDP source port for the client (wsdd)</description>
+  <port port="37020" protocol="udp"/>
+  <destination ipv4="239.255.255.250" ipv6="FF02::C"/>
+</service>

@@ -37,8 +37,9 @@ Samba at some time in the future.
 
 # Requirements
 
-wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD and MacOS.
-Other Unixes, such as NetBSD, might work as well but were not tested.
+wsdd requires Python 3.7 and later only. It runs on Linux, FreeBSD, OpenBSD,
+MacOS and SunOS/Illumos. Other Unixes, such as NetBSD, might work as well but
+were not tested.
 
 Although Samba is not strictly required by wsdd itself, it makes sense to run
 wsdd only on hosts with a running Samba daemon. Note that the OpenRC/Gentoo
@@ -131,7 +132,7 @@ You should further restrict the traffic to the (link-)local subnet, e.g. by
 using the `fe80::/10` address space for IPv6. Please note that IGMP traffic
 must be enabled in order to get IPv4 multicast traffic working.
 
-For UFW and firewald, application/service profiles can be found in the respective directories.
+For UFW and firewalld, application/service profiles can be found in the respective directories.
 Note that UFW profiles only allow to grant the traffic on specific UDP and TCP
 ports, but a restriction on the IP range (like link local for IPv6) or the
 multicast traffic is not possible.
@@ -189,6 +190,13 @@ below for details.
 
  * `--metadata-timeout TIMEOUT`
      Set the timeout for HTTP-based metadata exchange. Default is 2.0 seconds.
+
+ * `--source-port PORT`
+     Set the source port for outgoing multicast messages, so that replies will
+     use this as the destination port.
+     This is useful for firewalls that do not detect incoming unicast replies
+     to a multicast as part of the flow, so the port needs to be fixed in order
+     to be allowed manually.
 
  * `-s`, `--shortlog`
 

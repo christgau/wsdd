@@ -1,0 +1,4 @@
+[wsd-client]
+title=WSD Client
+description=Allow discovery of WSD-supporting devices on the local network
+ports=37020/udp

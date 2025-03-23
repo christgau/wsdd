@@ -54,6 +54,13 @@ For IPv6, only link local addresses are actually considered as noted above.
 \fB\-\-metadata-timeout\ \fITIMEOUT\fR
 Set the timeout for HTTP-based metadata exchange. Default is 2.0 seconds.
 .TP
+\fB\-\-source-port\ \fPORT\fR
+Set the source port for outgoing multicast messages, so that replies will
+use this as the destination port.
+This is useful for firewalls that do not detect incoming unicast replies
+to a multicast as part of the flow, so the port needs to be fixed in order
+to be allowed manually.
+.TP
 \fB\-s\fR, \fB\-\-shortlog\fR
 Use a shorter logging format that only includes the level and message.
 This is useful in cases where the logging mechanism, like systemd on Linux,
@@ -142,7 +149,7 @@ domain socket to which a client can connect to.
     wsdd \-\-interface eth0 \-\-interface eth2 \-\-ipv6only
 .SS Set the Workgroup according to smb.conf, be verbose, run with dropped privileges, and change the root directory to an (empty) directory
 
-    SMB_GROUP=$(grep \-i '^\s*workgroup\s*=' smb.conf | cut \-f2 \-d= | tr \-d '[:blank:]')
+    SMB_GROUP=$(grep \-i '^\\s*workgroup\\s*=' smb.conf | cut \-f2 \-d= | tr \-d '[:blank:]')
 
     wsdd \-v \-w $SMB_GROUP -u daemon:daemon -c /var/run/wsdd/chroot
 .SH FIREWALL SETUP
@@ -174,8 +181,8 @@ discovered devices are listed. The possibly empty list of detected hosts is
 always terminated with a single dot ('.') in an otherwise empty line. This
 command is only available in discover mode.
 .TP
-UUID
-UUID of the discovered device. Note that a multi-homed device should appear
+URI
+URI of the discovered device. Note that a multi-homed device should appear
 only once but with multiple addresses (see below)
 .TP
 name

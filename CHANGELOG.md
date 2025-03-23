@@ -1,5 +1,17 @@
 # Changelog
 
+## unreleased
+
+### Added
+
+- Add command line argument to set source port for multicast message for better firewall interoperability (#216)
+- Add initial support for SunOS (#223), without dynamic address/interface monitoring. Thanks to Carsten Grzemba.
+
+### Changed
+
+- Devices are now recorded based on their URI provided in the endpoint reference address, which is not neccessarily a UUID. This also affects API (see #226).
+- make `/etc/default/wsdd` optional for systemd (see #212)
+
 ## [0.8] -- 2024-03-30
 
 ### Added

@@ -34,15 +34,19 @@ import pwd
 import grp
 import datetime
 
-from typing import Any, Callable, ClassVar, Deque, Dict, List, Optional, Set, Union, Tuple, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Deque, Dict, List, Optional, Set, Union, Tuple
 
 # try to load more secure XML module first, fallback to default if not present
 try:
-    if not TYPE_CHECKING:
-        from defusedxml.ElementTree import fromstring as ETfromString
+    from defusedxml.ElementTree import fromstring as ETfromString
 except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring as ETfromString
 
+try:
+    import systemd.daemon  # type: ignore
+except ModuleNotFoundError:
+    # Non-systemd host
+    pass
 
 WSDD_VERSION: str = '0.8'
 
@@ -112,11 +116,12 @@ class NetworkAddress:
 
     @property
     def is_multicastable(self):
+        """ return true if the (interface) address can be used for creating (link-local) multicasting sockets  """
         # Nah, this check is not optimal but there are no local flags for
         # addresses, but it should be safe for IPv4 anyways
         # (https://tools.ietf.org/html/rfc5735#page-3)
-        return ((self._family == socket.AF_INET) and (self._raw_address[0] == 127)
-                or (self._family == socket.AF_INET6) and (self._raw_address[0:2] != b'\xfe\x80'))
+        return ((self._family == socket.AF_INET) and (self._raw_address[0] != 127)
+                or (self._family == socket.AF_INET6) and (self._raw_address[0:2] == b'\xfe\x80'))
 
     @property
     def raw(self):
@@ -263,6 +268,13 @@ class MulticastHandler:
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, args.hoplimit)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
 
+        # bind multicast socket to interface address and a user-provided port (or random if unspecified)
+        # this allows not-so-smart firewalls to whitelist another port to allow incoming replies
+        try:
+            self.mc_send_socket.bind((str(self.address), args.source_port, 0, idx))
+        except OSError:
+            logger.error('specified port {} already in use for {}'.format(args.source_port, str(self.address)))
+
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT, 0, idx)
 
     def init_v4(self) -> None:
@@ -271,7 +283,10 @@ class MulticastHandler:
         self.multicast_address = UdpAddress(self.address.family, raw_mc_addr, self.address.interface)
 
         # v4: member_request (ip_mreqn) = { multicast_addr, intf_addr, idx }
-        mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
+        if platform.system() == 'SunOS':
+            mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw)
+        else:
+            mreq = (socket.inet_pton(self.address.family, WSD_MCAST_GRP_V4) + self.address.raw + struct.pack('@I', idx))
         self.recv_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         if platform.system() == 'Linux':
@@ -286,11 +301,21 @@ class MulticastHandler:
         # bind unicast socket to interface address and WSD's udp port
         self.uc_send_socket.bind((self.address.address_str, WSD_UDP_PORT))
 
-        self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
+        if platform.system() == 'SunOS':
+            self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, self.address.raw)
+        else:
+            self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
         # OpenBSD requires the optlen to be sizeof(char) for LOOP and TTL options
         # (see also https://github.com/python/cpython/issues/67316)
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, struct.pack('B', 0))
         self.mc_send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('B', args.hoplimit))
+
+        # bind multicast socket to interface address and a user-provided port (or random if unspecified)
+        # this allows not-so-smart firewalls to whitelist another port to allow incoming replies
+        try:
+            self.mc_send_socket.bind((self.address.address_str, args.source_port))
+        except OSError:
+            logger.error('specified port {} already in use for {}'.format(args.source_port, self.address.address_str))
 
         self.listen_address = (self.address.address_str, WSD_HTTP_PORT)
 
@@ -646,7 +671,7 @@ class WSDDiscoveredDevice:
             elif dialect == WSDP_URI + '/Relationship':
                 host_xpath = 'wsdp:Relationship[@Type="{}/host"]/wsdp:Host'.format(WSDP_URI)
                 host_sec = section.find(host_xpath, namespaces)
-                if (host_sec):
+                if (host_sec is not None):
                     self.extract_host_props(host_sec)
             else:
                 logger.debug('unknown metadata dialect ({})'.format(dialect))
@@ -772,9 +797,9 @@ class WSDClient(WSDUDPMessageHandler):
     def handle_bye(self, header: ElementTree.Element, body: ElementTree.Element) -> Optional[WSDMessage]:
         bye_path = 'wsd:Bye'
         endpoint, _ = self.extract_endpoint_metadata(body, bye_path)
-        device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in WSDDiscoveredDevice.instances:
-            del WSDDiscoveredDevice.instances[device_uuid]
+        device_uri = str(urllib.parse.urlparse(endpoint).geturl())
+        if device_uri in WSDDiscoveredDevice.instances:
+            del WSDDiscoveredDevice.instances[device_uri]
 
         return None
 
@@ -857,17 +882,19 @@ class WSDClient(WSDUDPMessageHandler):
                 self.handle_metadata(stream.read(), endpoint, xaddr)
         except urllib.error.URLError as e:
             logger.warning('could not fetch metadata from: {} {}'.format(url, e))
+        except TimeoutError:
+            logger.warning('metadata exchange with {} timed out'.format(url))
 
     def build_getmetadata_message(self, endpoint) -> str:
         tree, _ = self.build_message_tree(endpoint, WSD_GET, None, None)
         return self.xml_to_str(tree)
 
     def handle_metadata(self, meta: str, endpoint: str, xaddr: str) -> None:
-        device_uuid = str(uuid.UUID(endpoint))
-        if device_uuid in WSDDiscoveredDevice.instances:
-            WSDDiscoveredDevice.instances[device_uuid].update(meta, xaddr, self.mch.address.interface)
+        device_uri = urllib.parse.urlparse(endpoint).geturl()
+        if device_uri in WSDDiscoveredDevice.instances:
+            WSDDiscoveredDevice.instances[device_uri].update(meta, xaddr, self.mch.address.interface)
         else:
-            WSDDiscoveredDevice.instances[device_uuid] = WSDDiscoveredDevice(meta, xaddr, self.mch.address.interface)
+            WSDDiscoveredDevice.instances[device_uri] = WSDDiscoveredDevice(meta, xaddr, self.mch.address.interface)
 
     def remove_outdated_probes(self) -> None:
         cut = time.time() - PROBE_TIMEOUT * 2
@@ -1109,10 +1136,12 @@ class WSDHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 class ApiServer:
 
     address_monitor: 'NetworkAddressMonitor'
+    clients: List[asyncio.StreamWriter]
 
-    def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: bytes,
+    def __init__(self, aio_loop: asyncio.AbstractEventLoop, listen_address: Any,
                  address_monitor: 'NetworkAddressMonitor') -> None:
         self.server = None
+        self.clients = []
         self.address_monitor = address_monitor
 
         # defer server creation
@@ -1123,7 +1152,11 @@ class ApiServer:
         # It appears mypy is not able to check the argument to create_task and the return value of start_server
         # correctly. The docs say start_server returns a coroutine and the create_task takes a coro. And: It works.
         # Thus, we ignore type errors here.
-        if isinstance(listen_address, int) or listen_address.isnumeric():
+        if isinstance(listen_address, socket.SocketType):
+            # create socket from systemd file descriptor/socket
+            self.server = await aio_loop.create_task(asyncio.start_unix_server(  # type: ignore
+                self.on_connect, sock=listen_address))
+        elif isinstance(listen_address, int) or listen_address.isnumeric():
             self.server = await aio_loop.create_task(asyncio.start_server(  # type: ignore
                 self.on_connect, host='localhost', port=int(listen_address), reuse_address=True,
                 reuse_port=True))
@@ -1132,6 +1165,7 @@ class ApiServer:
                 self.on_connect, path=listen_address))
 
     async def on_connect(self, read_stream: asyncio.StreamReader, write_stream: asyncio.StreamWriter) -> None:
+        self.clients.append(write_stream)
         while True:
             try:
                 line = await read_stream.readline()
@@ -1140,12 +1174,14 @@ class ApiServer:
                     if not write_stream.is_closing():
                         await write_stream.drain()
                 else:
+                    self.clients.remove(write_stream)
                     write_stream.close()
                     return
             except UnicodeDecodeError as e:
                 logger.debug('invalid input utf8', e)
             except Exception as e:
                 logger.warning('exception in API client', e)
+                self.clients.remove(write_stream)
                 write_stream.close()
                 return
 
@@ -1181,7 +1217,7 @@ class ApiServer:
 
     def get_list_reply(self, wsd_type: Optional[str]) -> str:
         retval = ''
-        for dev_uuid, dev in WSDDiscoveredDevice.instances.items():
+        for dev_uri, dev in WSDDiscoveredDevice.instances.items():
             if wsd_type and (wsd_type not in dev.types):
                 continue
 
@@ -1190,7 +1226,7 @@ class ApiServer:
                 addrs_str.append(', '.join(['{}'.format(a) for a in addrs]))
 
             retval = retval + '{}\t{}\t{}\t{}\t{}\t{}\n'.format(
-                dev_uuid,
+                dev_uri,
                 dev.display_name,
                 dev.props['BelongsTo'] if 'BelongsTo' in dev.props else '',
                 datetime.datetime.fromtimestamp(dev.last_seen).isoformat('T', 'seconds'),
@@ -1205,6 +1241,8 @@ class ApiServer:
         await self.create_task
         if self.server:
             self.server.close()
+            for client in self.clients:
+                client.close()
             await self.server.wait_closed()
 
 
@@ -1289,7 +1327,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
         if args.ipv6only and address.family != socket.AF_INET6:
             return False
 
-        if address.is_multicastable:
+        if not address.is_multicastable:
             return False
 
         # Use interface only if it's in the list of user-provided interface names
@@ -1770,6 +1808,58 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         super().cleanup()
 
 
+class DladmAddressMonitor(NetworkAddressMonitor):
+
+    class sockaddr(ctypes.Structure):
+        _fields_ = [("family", ctypes.c_ushort),
+                    ("dummy", ctypes.c_ushort),
+                    ("data", ctypes.c_ubyte * 14)]
+
+    class ifaddrs(ctypes.Structure):
+        pass
+
+    ifaddrs._fields_ = [("next", ctypes.POINTER(ifaddrs)),
+                        ("name", ctypes.c_char_p),
+                        ("flags", ctypes.c_ulonglong),
+                        ("addr", ctypes.POINTER(sockaddr)),
+                        ("netmask", ctypes.POINTER(sockaddr)),
+                        ("dstaddr", ctypes.POINTER(sockaddr)),
+                        ("data", ctypes.c_void_p)]
+
+    def freeifaddrs(self, ifa) -> None:
+        libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+        while ifa.next:
+            curr = ifa
+            ifa = ifa.next[0]
+            libc.free(curr.name)
+            libc.free(curr.addr)
+            libc.free(curr.netmask)
+            libc.free(curr.dstaddr)
+            libc.free(curr.data)
+            del curr
+
+    def do_enumerate(self) -> None:
+        super().do_enumerate()
+        libsocket = ctypes.CDLL(ctypes.util.find_library('socket'), use_errno=True)
+        ifas = self.ifaddrs()
+        if libsocket.getifaddrs(ctypes.byref(ifas)) == 0:
+            ifa = ifas
+            ifa_idx = 0
+            while ifa.next:
+                if ifa.name:
+                    logger.debug("{}%{}".format(
+                        socket.inet_ntop(ifa.addr[0].family, bytes(ifa.addr[0].data[:4])),
+                        ifa.name.decode()))
+                    addr = socket.inet_ntop(ifa.addr[0].family, bytes(ifa.addr[0].data[:4]))
+                    intf = NetworkInterface(ifa.name.decode(), 0, ifa_idx)
+                    self.add_interface(intf)
+                    self.handle_new_address(NetworkAddress(ifa.addr[0].family, addr, intf))
+                    ifa_idx += 1
+
+                ifa = ifa.next[0]
+            self.freeifaddrs(ifas)
+
+
 def sigterm_handler() -> None:
     logger.info('received termination/interrupt signal, tearing down')
     # implictely raise SystemExit to cleanup properly
@@ -1862,6 +1952,11 @@ def parse_args() -> None:
         '--metadata-timeout',
         help='set timeout for HTTP-based metadata exchange',
         default=2.0)
+    parser.add_argument(
+        '--source-port',
+        help='send multicast traffic/receive replies on this port',
+        type=int,
+        default=0)
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1972,6 +2067,8 @@ def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> 
         return NetlinkAddressMonitor(aio_loop)
     elif system in ['FreeBSD', 'Darwin', 'OpenBSD']:
         return RouteSocketAddressMonitor(aio_loop)
+    elif system == 'SunOS':
+        return DladmAddressMonitor(aio_loop)
     else:
         raise NotImplementedError('unsupported OS: ' + system)
 
@@ -1991,6 +2088,10 @@ def main() -> int:
     api_server = None
     if args.listen:
         api_server = ApiServer(aio_loop, args.listen, nm)
+    elif 'systemd' in sys.modules:
+        fds = systemd.daemon.listen_fds()
+        if fds:
+            api_server = ApiServer(aio_loop, socket.socket(fileno=fds[0]), nm)
 
     # get uid:gid before potential chroot'ing
     if args.user is not None:

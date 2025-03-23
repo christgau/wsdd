@@ -15,12 +15,12 @@ jobs:
     steps:
     - uses: actions/checkout@v1
 
-    - name: Set up Python 3.7
+    - name: Set up Python 3.9
       uses: actions/setup-python@v1
       with:
-        python-version: 3.7
+        python-version: 3.9
 
-    - name: Python 3.7 syntax check
+    - name: Python 3.9 syntax check
       run: python -m py_compile src/wsdd.py
 
     - name: Lint with flake8
@@ -30,10 +30,5 @@ jobs:
 
     - name: mypy type check
       run: |
-        pip install mypy==0.910
-        mypy --python-version=3.7 src/wsdd.py
-        mypy --python-version=3.8 src/wsdd.py
-        mypy --python-version=3.9 src/wsdd.py
-        mypy --python-version=3.10 src/wsdd.py
-        mypy --python-version=3.11 src/wsdd.py
-        mypy --python-version=3.12 src/wsdd.py
+        pip install mypy==1.13.0
+        test/linting/mypy.sh
