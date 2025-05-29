@@ -54,7 +54,7 @@ Sufficient privileges are assumed to be in effect, e.g. by being root or using s
 
 ### Arch Linux
 
-Install wsdd from the [AUR package](https://aur.archlinux.org/wsdd.git).
+Install wsdd from the [Extra repository](https://archlinux.org/packages/extra/any/wsdd/).
 
 ### CentOS, Fedora, RHEL
 
