@@ -9,7 +9,7 @@
 # see http://specs.xmlsoap.org/ws/2005/04/discovery/ws-discovery.pdf and
 # related documents for details (look at README for more references)
 #
-# (c) Steffen Christgau, 2017-2024
+# (c) Steffen Christgau, 2017-2025
 
 import sys
 import signal
@@ -48,7 +48,7 @@ except ModuleNotFoundError:
     # Non-systemd host
     pass
 
-WSDD_VERSION: str = '0.8'
+WSDD_VERSION: str = '0.9'
 
 
 args: argparse.Namespace
