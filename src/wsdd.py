@@ -2074,7 +2074,7 @@ def create_address_monitor(system: str, aio_loop: asyncio.AbstractEventLoop) -> 
 
 
 def main() -> int:
-    global logger, args
+    global logger, args  # noqa: F824
 
     parse_args()
 
