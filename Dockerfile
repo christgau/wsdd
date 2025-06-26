@@ -1,6 +1,7 @@
-FROM python:alpine
+ARG BASE_IMAGE=python:alpine
+FROM $BASE_IMAGE
 
-RUN apk update && apk add --no-cache bash
+RUN apk add --no-cache bash
 
 RUN mkdir /code
 
