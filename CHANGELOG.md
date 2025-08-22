@@ -1,16 +1,24 @@
 # Changelog
 
-## unreleased
+## [0.9] -- 2025-06-01
 
 ### Added
 
 - Add command line argument to set source port for multicast message for better firewall interoperability (#216)
 - Add initial support for SunOS (#223), without dynamic address/interface monitoring. Thanks to Carsten Grzemba.
+- Add Socket-activated systemd service (#218). Thanks to Alessandro Astone.
 
 ### Changed
 
 - Devices are now recorded based on their URI provided in the endpoint reference address, which is not neccessarily a UUID. This also affects API (see #226).
 - make `/etc/default/wsdd` optional for systemd (see #212)
+- Remove support for Python 3.7 and 3.8 in Github workflows.
+
+### Fixed
+
+- Clean conection turn-down for Python pre-3.13. Thanks to Alessandro Astone
+- Handle TimeoutError in metadata exchange.
+- Proper handling of endpoint addresses as URIs, not UUIDs, see #226.
 
 ## [0.8] -- 2024-03-30
 
