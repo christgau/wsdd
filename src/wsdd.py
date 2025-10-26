@@ -2013,6 +2013,11 @@ def chroot(root: str) -> bool:
     """
     # preload for socket.gethostbyaddr()
     import encodings.idna
+    import shutil
+    os.makedirs(root + '/etc/', exist_ok=True)
+    shutil.copy('/etc/resolv.conf',root + '/etc/')
+    # for listen
+    import concurrent.futures.thread
 
     try:
         os.chroot(root)
