@@ -1,5 +1,11 @@
 # Changelog
 
+## unreleased
+
+### Fixed
+
+- Address filtering during interface enumeration respects command line options more strict (see #238)
+
 ## [0.9] -- 2025-06-01
 
 ### Added

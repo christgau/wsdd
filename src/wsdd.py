@@ -1316,15 +1316,21 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
 
         return self.interfaces[interface.index]
 
+    def get_handled_address_families(self) -> Set[int]:
+        """ get a set of handles address families for filtering during enumeration  """
+        if not self.active:
+            return {}
+
+        if args.ipv4only:
+            return {socket.AF_INET}
+        if args.ipv6only:
+            return {socket.AF_INET6}
+
+        return {socket.AF_INET, socket.AF_INET6}
+
     def is_address_handled(self, address: NetworkAddress) -> bool:
         # do not handle anything when we are not active
         if not self.active:
-            return False
-
-        # filter out address families we are not interested in
-        if args.ipv4only and address.family != socket.AF_INET:
-            return False
-        if args.ipv6only and address.family != socket.AF_INET6:
             return False
 
         if not address.is_multicastable:
@@ -1529,6 +1535,7 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
         buf, src = self.socket.recvfrom(4096)
         logger.debug('netlink message with {} bytes'.format(len(buf)))
+        handled_families = self.get_handled_address_families()
 
         offset = 0
         while offset < len(buf):
@@ -1546,6 +1553,11 @@ class NetlinkAddressMonitor(NetworkAddressMonitor):
 
             # decode ifaddrmsg as in if_addr.h
             ifa_family, _, ifa_flags, ifa_scope, ifa_idx = struct.unpack_from(IFADDR_MSG_DEF, buf, offset)
+            if ifa_family not in handled_families:
+                offset += align_to(msg_len, NLM_HDR_ALIGNTO)
+                logger.debug('ignore address with wrong address family {}'.format(ifa_family))
+                continue
+
             if ((ifa_flags & IFA_F_DADFAILED) or (ifa_flags & IFA_F_HOMEADDRESS)
                     or (ifa_flags & IFA_F_DEPRECATED) or (ifa_flags & IFA_F_TENTATIVE)):
                 logger.debug('ignore address with invalid state {}'.format(hex(ifa_flags)))
@@ -1759,12 +1771,15 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
         addr_type_idx = 1
         addr = None
         addr_family: int = socket.AF_UNSPEC
+
+        handled_families = self.get_handled_address_families()
+
         while offset < limit:
             while not (addr_type_idx & addr_mask) and (addr_type_idx <= addr_mask):
                 addr_type_idx = addr_type_idx << 1
 
             sa_len, sa_fam = struct.unpack_from('@BB', buf, offset)
-            if sa_fam in [socket.AF_INET, socket.AF_INET6] and addr_type_idx == RTA_IFA:
+            if sa_fam in handled_families and addr_type_idx == RTA_IFA:
                 addr_family = sa_fam
                 addr_offset = 4 if sa_fam == socket.AF_INET else 8
                 addr_length = 4 if sa_fam == socket.AF_INET else 16
@@ -1842,11 +1857,17 @@ class DladmAddressMonitor(NetworkAddressMonitor):
         super().do_enumerate()
         libsocket = ctypes.CDLL(ctypes.util.find_library('socket'), use_errno=True)
         ifas = self.ifaddrs()
+        handled_families = self.get_handled_address_families()
         if libsocket.getifaddrs(ctypes.byref(ifas)) == 0:
             ifa = ifas
             ifa_idx = 0
             while ifa.next:
                 if ifa.name:
+                    if ifa.addr[0].family not in handled_families:
+                        ifa = ifa.next[0]
+                        ifa_idx += 1
+                        continue
+
                     logger.debug("{}%{}".format(
                         socket.inet_ntop(ifa.addr[0].family, bytes(ifa.addr[0].data[:4])),
                         ifa.name.decode()))
