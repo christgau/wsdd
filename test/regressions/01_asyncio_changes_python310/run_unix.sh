@@ -4,7 +4,7 @@
 # The API for ´start_unix_server´ was schanged in 3.10.
 # @see Github issue #162
 
-python_versions=('3' '3.9' '3.10' '3.11' '3.12' '3.13')
+python_versions=('3' '3.9' '3.10' '3.11' '3.12' '3.13' '3.14')
 
 socket_dir="$(mktemp -d)"
 socket_filename="${socket_dir}/wsdd.sock"
