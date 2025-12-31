@@ -1319,7 +1319,7 @@ class NetworkAddressMonitor(metaclass=MetaEnumAfterInit):
     def get_handled_address_families(self) -> Set[int]:
         """ get a set of handles address families for filtering during enumeration  """
         if not self.active:
-            return {}
+            return set()
 
         if args.ipv4only:
             return {socket.AF_INET}
@@ -1787,7 +1787,7 @@ class RouteSocketAddressMonitor(NetworkAddressMonitor):
                 addr = buf[addr_start:addr_start + addr_length]
                 if sa_fam == socket.AF_INET6:
                     addr = self.clear_addr_scope(addr)
-            elif sa_fam == socket.AF_LINK:
+            elif sa_fam == socket.AF_LINK:  # type: ignore[attr-defined]
                 idx, _, name_len = struct.unpack_from('@HBB', buf, offset + 2)
                 if idx > 0:
                     off_name = offset + 8
