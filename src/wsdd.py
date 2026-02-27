@@ -1951,7 +1951,7 @@ def parse_args() -> None:
         default=None)
     parser.add_argument(
         '-u', '--user',
-        help='drop privileges to user:group',
+        help='drop privileges to user[:group]',
         default=None)
     parser.add_argument(
         '-D', '--discovery',
@@ -2057,6 +2057,8 @@ def get_ids_from_userspec(user_spec: str) -> Tuple[int, int]:
 
         if group:
             gid = grp.getgrnam(group).gr_gid
+        else:
+            gid = pwd.getpwnam(user).pw_gid
     except Exception as e:
         raise RuntimeError('could not get uid/gid for {}: {}'.format(user_spec, e))
 
