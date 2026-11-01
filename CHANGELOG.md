@@ -2,6 +2,11 @@
 
 ## unreleased
 
+### Changed
+
+- Bump minimal Python version to 3.11 (may run with lower version still)
+- Add Linting support for Python 3.15
+
 ### Fixed
 
 - Address filtering during interface enumeration respects command line options more strict (see #238)

@@ -19,31 +19,31 @@ netcat="nc"
 netcat_args=("-U" "${socket_filename}" "-N")
 
 for version in "${python_versions[@]}"; do
-		python_ver_name="python${version}"
+	python_ver_name="python${version}"
 
-		if command -v "${python_ver_name}" >/dev/null 2>&1; then
-			python_found=1
-			rm -f "${socket_filename}"
-			"${python_ver_name}" "${WSDD_SCRIPT}" "${wsdd_script_args[@]}" &
-			wsdd_pid=$!
+	if command -v "${python_ver_name}" >/dev/null 2>&1; then
+		python_found=1
+		rm -f "${socket_filename}"
+		"${python_ver_name}" "${WSDD_SCRIPT}" "${wsdd_script_args[@]}" &
+		wsdd_pid=$!
 
-			# wait until socket should be ready
-			sleep 2
+		# wait until socket should be ready
+		sleep 2
 
-			# connect to socket and send a simple command
-			${netcat} "${netcat_args[@]}" <<< "list"
+		# connect to socket and send a simple command
+		${netcat} "${netcat_args[@]}" <<< "list"
 
-			# terminate and get exit status
-			kill -INT ${wsdd_pid}
-			wait ${wsdd_pid}
-			status=$?
+		# terminate and get exit status
+		kill -INT ${wsdd_pid}
+		wait ${wsdd_pid}
+		status=$?
 
-			if [ ! ${status} -eq 0 ]; then
-					return_code=1
-			fi
-
-			rm -f "${socket_filename}"
+		if [ ! ${status} -eq 0 ]; then
+				return_code=1
 		fi
+
+		rm -f "${socket_filename}"
+	fi
 done
 
 find "${socket_dir}" -delete

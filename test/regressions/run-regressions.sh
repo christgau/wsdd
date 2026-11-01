@@ -10,9 +10,9 @@ export WSDD_SCRIPT="${WSDD_ROOT_DIR}/src/wsdd.py"
 test_files=()
 
 for script in "${basedir}"/*/*.sh; do
-		if [ -x ${script} ]; then
-				test_files+=("${script}")
-		fi
+	if [ -x ${script} ]; then
+		test_files+=("${script}")
+	fi
 done
 
 total_tests="${#test_files[@]}"
@@ -27,22 +27,22 @@ num_succeeded=0
 num_failed=0
 
 for test_case in "${test_files[@]}"; do
-		log_target="$(mktemp)"
+	log_target="$(mktemp)"
 
-		echo -n "[${test_number}/${total_tests}] $(basename $(dirname "$test_case")) -> $(basename "${test_case}")... "
+	echo -n "[${test_number}/${total_tests}] $(basename $(dirname "$test_case")) -> $(basename "${test_case}")... "
 
-		if "${test_case}" > ${log_target} 2>&1; then
-				echo "OK"
-				num_succeeded=$((num_succeeded + 1))
-		else
-				cat "${log_target}"
-				echo "FAILED"
-				num_failed=$((num_failed + 1))
-		fi
+	if "${test_case}" > ${log_target} 2>&1; then
+		echo "OK"
+		num_succeeded=$((num_succeeded + 1))
+	else
+		cat "${log_target}"
+		echo "FAILED"
+		num_failed=$((num_failed + 1))
+	fi
 
-		rm -f "${log_target}"
+	rm -f "${log_target}"
 
-		test_number=$(($test_number + 1))
+	test_number=$(($test_number + 1))
 done
 
 echo "------------------------------------------"
