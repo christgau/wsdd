@@ -11,6 +11,7 @@
 ### Fixed
 
 - Address filtering during interface enumeration respects command line options more strict (see #238)
+- Make per-interface initial probe non-blocking
 
 ## [0.9] -- 2025-06-01
 

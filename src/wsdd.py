@@ -737,9 +737,8 @@ class WSDClient(WSDUDPMessageHandler):
         self.handlers[WSD_PROBE_MATCH] = self.handle_probe_match
         self.handlers[WSD_RESOLVE_MATCH] = self.handle_resolve_match
 
-        # avoid packet storm when hosts come up by delaying initial probe
-        time.sleep(random.randint(0, MAX_STARTUP_PROBE_DELAY))
-        self.send_probe()
+        # Avoid a packet storm when hosts come up by delaying the initial probe.
+        self.mch.aio_loop.call_later(random.uniform(0, MAX_STARTUP_PROBE_DELAY), self.send_probe)
 
     def cleanup(self) -> None:
         super().cleanup()
