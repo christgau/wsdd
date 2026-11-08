@@ -14,14 +14,14 @@ Wants=network-online.target
 Type=simple
 ; Use /etc/default/wsdd for defaults, if it exists
 EnvironmentFile=-/etc/default/wsdd
-; The service is put into an empty runtime directory chroot,
-; i.e. the runtime directory which usually resides under /run
-ExecStart=/usr/bin/wsdd --shortlog --chroot=/run/wsdd $WSDD_PARAMS
+ExecStart=/usr/bin/wsdd --shortlog $WSDD_PARAMS
+; DynamicUser=yes implies ProtectSystem=strict
 DynamicUser=yes
 User=wsdd
 Group=wsdd
+ProtectHome=yes
+PrivateDevices=yes
 RuntimeDirectory=wsdd
-AmbientCapabilities=CAP_SYS_CHROOT
 
 [Install]
 WantedBy=multi-user.target

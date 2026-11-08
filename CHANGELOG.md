@@ -6,6 +6,7 @@
 
 - Bump minimal Python version to 3.11 (may run with lower version still)
 - Add Linting support for Python 3.15
+- Remove `chroot` from systemd unit files and isolate services by `ProtectHome` and `PrivateDevices` directives.
 
 ### Fixed
 
